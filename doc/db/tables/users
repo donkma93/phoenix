@@ -1,0 +1,3 @@
+ALTER TABLE `phoenix`.`users`
+ADD COLUMN `webhook_url` VARCHAR(255) NULL DEFAULT NULL AFTER `partner_code`;
+===============================================

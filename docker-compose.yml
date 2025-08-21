@@ -1,0 +1,32 @@
+version: '3.7'
+services:
+    app:
+        build: 
+            context: .
+            dockerfile: Dockerfile
+        working_dir: /var/www/html
+        networks:
+            - pro_default
+            - default
+        volumes: 
+            - ./:/var/www/html
+            - ./docker/php/local.ini:/usr/local/etc/php/conf.d/local.ini
+    proxy:
+        image: nginx:alpine
+        networks:
+            - pro_default
+            - default
+        ports:
+            - "9096:80" # phoenix logistics
+            # - "443:443"
+        depends_on:
+            - app
+        volumes: 
+            - ./:/var/www/html
+            - ./docker/nginx/conf.d/:/etc/nginx/conf.d/
+
+networks:
+  pro_default:
+    external: true
+  default: {}
+  

@@ -1,0 +1,26 @@
+CREATE DEFINER=`root`@`localhost` PROCEDURE `search_packinglist_detail`(in p_code varchar(30))
+begin
+
+
+
+
+	select
+		odr.id,
+		odr.order_code,
+		odr.order_number,
+		odr.tracking ,
+		odr.created_at,
+        ord_trans.tracking_provider
+		from orders odr
+	INNER JOIN order_journey pkg ON odr.id = pkg.order_id
+    LEFT JOIN order_transactions ord_trans ON odr.id = ord_trans.order_id
+
+	where
+		id_packing_list = (select id from packing_list where  packing_list_code COLLATE utf8mb4_general_ci = p_code ) and
+		inout_type = 1
+	;
+
+
+
+
+END

@@ -1,0 +1,42 @@
+//
+// Border-radius
+//
+
+@each $round in $rounds {
+    .arounded-#{$round} {
+        border-radius: #{$round / 16}rem !important;
+    }
+    .arounded-top-#{$round} {
+        border-top-left-radius: #{$round / 16}rem !important;
+        border-top-right-radius: #{$round / 16}rem !important;
+    }
+
+    .arounded-right-#{$round} {
+        border-top-right-radius: #{$round / 16}rem !important;
+        border-bottom-right-radius: #{$round / 16}rem !important;
+    }
+
+    .arounded-bottom-#{$round} {
+        border-bottom-right-radius: #{$round / 16}rem !important;
+        border-bottom-left-radius: #{$round / 16}rem !important;
+    }
+
+    .arounded-left-#{$round} {
+        border-top-left-radius: #{$round / 16}rem !important;
+        border-bottom-left-radius: #{$round / 16}rem !important;
+    }
+}
+
+.rounded-circle {
+    border-radius: 50% !important;
+}
+
+.rounded-pill {
+    border-radius: 9999em !important;
+}
+
+@each $color, $value in $colors {
+    .abd-#{$color} {
+        border-color: $value !important;
+    }
+}

@@ -1,0 +1,15 @@
+CREATE TABLE `od_receivers` (
+  `receiver_id` int unsigned NOT NULL AUTO_INCREMENT,
+  `receiver_company` varchar(100) DEFAULT NULL,
+  `receiver_name` varchar(50) NOT NULL,
+  `receiver_phone` varchar(50) NOT NULL,
+  `receiver_country` varchar(50) NOT NULL,
+  `receiver_province` varchar(50) NOT NULL,
+  `receiver_address` varchar(255) NOT NULL,
+  `user_create` int NOT NULL,
+  `user_edit` int DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT NULL,
+  `deleted_at` timestamp NULL DEFAULT NULL,
+  PRIMARY KEY (`receiver_id`)
+) ENGINE=InnoDB AUTO_INCREMENT=7 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;

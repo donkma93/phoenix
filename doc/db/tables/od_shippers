@@ -1,0 +1,18 @@
+CREATE TABLE `od_shippers` (
+  `shipper_id` int unsigned NOT NULL AUTO_INCREMENT,
+  `shipper_company` varchar(100) DEFAULT NULL,
+  `shipper_name` varchar(50) NOT NULL,
+  `shipper_phone` varchar(50) NOT NULL,
+  `shipper_country` varchar(50) NOT NULL,
+  `shipper_province` varchar(50) NOT NULL,
+  `shipper_address` varchar(255) NOT NULL,
+  `user_create` int NOT NULL,
+  `user_edit` int DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT NULL,
+  `deleted_at` timestamp NULL DEFAULT NULL,
+  PRIMARY KEY (`shipper_id`)
+) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+================== 26/08/2024
+ALTER TABLE `phoenix`.`od_shippers`
+ADD COLUMN `pickup_address` VARCHAR(255) NULL DEFAULT NULL AFTER `shipper_address`;

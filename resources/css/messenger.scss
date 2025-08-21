@@ -1,0 +1,151 @@
+@import "coreui-variables";
+@import "colors";
+@import "variables";
+@import "mixins";
+@import "type";
+@import "buttons";
+@import "utilities";
+@import "filter-input";
+
+$avatars: (
+    xs: 30,
+    sm: 45,
+    md: 60,
+    lg: 80,
+);
+
+$width-chat-user-list: 360px;
+
+@each $size, $value in $avatars {
+    .avatar-#{$size} {
+        min-width: #{$value}px;
+        max-width: #{$value}px;
+        height: #{$value}px;
+        width: 100%;
+    }
+}
+
+.messenger-app {
+    margin-top: -32px;
+    margin-left: -32px;
+    margin-right: -32px;
+    &.show {
+        .chat-user-list {
+            right: 0;
+        }
+        .chat-messenger-list {
+            width: calc(100% - 360px);
+        }
+    }
+    &.hidden {
+        .chat-user-list {
+            right: -360px;
+        }
+        .chat-messenger-list {
+            width: 100%;
+        }
+    }
+}
+
+.chat-user-list {
+    height: 100%;
+    max-width: $width-chat-user-list;
+    min-width: $width-chat-user-list;
+    position: fixed;
+    top: 57px;
+    bottom: 0;
+    background: $white;
+    transition: right 0.3s ease-in-out;
+    z-index: 1000;
+}
+
+.chat-messenger-list {
+    width: calc(100vw - 256px - 360px);
+    transition: all 0.3s ease-in-out;
+}
+
+.chat-input {
+    min-height: 50px;
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -57px;
+}
+
+.chat-list {
+    height: calc(100vh - 178px);
+}
+
+.user-list {
+    height: calc(100vh - 180px);
+}
+
+.user-item {
+    transition: all 0.3s ease-in-out;
+    &:hover {
+        background-color: $light;
+    }
+}
+
+.chat-loading {
+    width: 100%;
+    position: absolute;
+    top: 62px;
+    bottom: 2px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: #fff;
+    z-index: 9;
+    .loader {
+        color: rgba($indigo-800, 0.6) !important;
+    }
+}
+
+.scroll-height {
+    overflow-y: scroll;
+    scroll-behavior: smooth;
+    mask-image: linear-gradient(to top, transparent, black),
+        linear-gradient(to left, transparent 17px, black 17px);
+    mask-size: 100% 20000px;
+    mask-position: left bottom;
+    -webkit-mask-image: linear-gradient(to top, transparent, black),
+        linear-gradient(to left, transparent 17px, black 17px);
+    -webkit-mask-size: 100% 20000px;
+    -webkit-mask-position: left bottom;
+    transition: mask-position 0.3s, -webkit-mask-position 0.3s;
+
+    &:hover {
+        -webkit-mask-position: left top;
+    }
+
+    &::-webkit-scrollbar {
+        width: 0.4em;
+    }
+
+    &::-webkit-scrollbar-track {
+        box-shadow: inset 0 0 6px rgba(0, 0, 0, 0);
+    }
+
+    &::-webkit-scrollbar-thumb {
+        background-color: $gray-400;
+    }
+}
+
+@include media-breakpoint-down(md) {
+    .messenger-app {
+        margin-left: -16px;
+        margin-right: -16px;
+        &.show,
+        &.hidden {
+            .chat-messenger-list {
+                width: 100%;
+            }
+        }
+    }
+
+    .chat-input {
+        position: fixed;
+        bottom: 0;
+    }
+}

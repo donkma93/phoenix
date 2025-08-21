@@ -1,0 +1,95 @@
+@extends('layouts.user')
+
+@section('breadcrumb')
+    @include('layouts.partials.breadcrumb', [
+        'items' => [
+            [
+                'text' => 'Dashboard',
+                'url' => route('dashboard'),
+            ],
+            [
+                'text' => 'Pickup Request Detail',
+            ],
+        ],
+    ])
+@endsection
+
+@section('content')
+    <?php
+    header('Content-Type: image/png');
+    ?>
+    <div class="fade-in">
+      <form target="_blank" method="get" action="{{ route('pickup.detail.print') }}">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h2 class="mb-0">{{ __('Pickup Request Detail') }}</h2>
+               
+                  <div class="search-form-group d-flex justify-content-center align-items-center"
+                  style="flex-direction: column!important"
+                  >
+                                <div class="search-input text-center text-sm-left">
+                                    <input class="btn btn-primary mb-3" type="submit" value="{{ __('Print') }}">
+                                </div>
+                    </div>
+            </div>
+            <div class="card-footer">
+                @if (count($orderJourneys) == 0)
+                    <div class="text-center">{{ __('No data.') }}</div>
+                @else
+                
+                    <div class="table-responsive">
+                        <table class="table table-align-middle table-bordered table-striped table-sm"
+                            id="staff-package-table">
+                            <thead>
+                                <tr>
+                                    <th></th>
+                                    <th>No</th>
+                                    <th>{{ __('Order Code') }}</th>
+                                    <th>{{ __('Partner') }}</th>
+                                    <th>{{ __('Info') }}</th>
+                                    <th>{{ __('KG') }}</th>
+                                    <th>{{ __('Date') }}</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach ($orderJourneys as $orderJourney)
+                                    <tr>
+                                        <td>
+                                            <input id="{{ $orderJourney->orders->order_code }}" class="form-group" type="checkbox"
+                                                name="label_list[]" value="{{$orderJourney->orders->order_code}}">
+                                        </td>
+                                        <td>{{ ($orderJourneys->currentPage() - 1) * $orderJourneys->perPage() + $loop->iteration }}
+                                        </td>
+                                        <td>
+                                            {{ $orderJourney->orders->order_code }}
+                                        </td>
+                                        <td
+                                         style="text-align:center"
+                                        >{{ $orderJourney->orders->partner_code }}</td>
+                                        <td>
+                                            <div><b>Name: </b>{{ $orderJourney->orders->addressTo->name ?? $orderJourney->orders->shipping_name ?? '' }}</div>
+                                            <div><b>Street: </b>{{ $orderJourney->orders->addressTo->street1 ?? $orderJourney->orders->shipping_street ?? '' }}</div>
+                                            <div><b>Province: </b>{{ $orderJourney->orders->addressTo->state ?? $orderJourney->orders->shipping_province ?? '' }}</div>
+                                            <div><b>WxHxD: </b>{{ $orderJourney->orders->orderPackage->width.'x'.$orderJourney->orders->orderPackage->height .'x'.$orderJourney->orders->orderPackage->length}}</div>
+                                        </td>
+                                        <td
+                                            style="text-align:center;font-size:18px;"
+                                        ><b>{{ $orderJourney->orders->orderPackage->weight }}</b>
+                                        </td>
+                                        <td>{{ $orderJourney->created_at }}</td>
+                                    </tr>
+                                @endforeach
+                            </tbody>
+                        </table>
+                    </div>
+                     </div>
+            
+                    <div class="d-flex justify-content-center justify-content-md-end amt-16">
+                        {{ $orderJourneys->appends(request()->all())->links('components.pagination') }}
+                    </div>
+                @endif
+            </div>
+        </div>
+    </form>
+    </div>
+@endsection

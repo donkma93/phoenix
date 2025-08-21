@@ -1,0 +1,59 @@
+/*
+tuannt
+2023-07-05
+*/
+html {
+    scroll-behavior: smooth;
+}
+
+.navbar-stick .navbar-brand a {
+    color: #343f52 !important;
+}
+.search-form:before {
+    cursor: pointer;
+}
+
+
+.home-block-1 {
+    background-image: url("../img/bg-2.jpg");
+    background-size: cover;
+    background-position: top right;
+    background-repeat: no-repeat;
+    min-height: 600px;
+}
+.home-block-1::after {
+    border: 0 solid white !important;
+    border-left-color: transparent !important;
+    border-left-width: 100vw !important;
+    bottom: 0 !important;
+    border-bottom-width: 4rem !important;
+}
+.home-block-1 .newsletter-wrapper {
+    padding: 20px 40px 40px;
+    background: #fff;
+    box-shadow: 8px 12px 24px rgba(0, 0, 0, .2);
+}
+.home-block-1 .block-check-tracking {
+    position: absolute;
+    bottom: -28px;
+    right: 0;
+    left: 0;
+    z-index: 1;
+    margin-left: 0;
+    margin-right: 0;
+}
+.custom-modal .modal-header {
+    border-bottom: 1px solid #ddd;
+    padding: 20px;
+}
+.custom-modal .modal-body {
+    padding: 20px 50px;
+    color: #000;
+}
+.custom-modal .modal-footer {
+    border-top: 1px solid #ddd;
+    padding: 10px 0;
+}
+.custom-modal hr {
+    margin: 10px 0 20px;
+}

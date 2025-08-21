@@ -1,0 +1,197 @@
+CREATE DEFINER=`root`@`localhost` PROCEDURE `label_create_input`(
+
+		in 	p_user_id INT,
+		IN	p_order_id INT,
+		IN	p_shipping_name VARCHAR(30),
+		IN	p_shipping_street VARCHAR(100),
+		IN	p_shipping_address1 VARCHAR(100),
+		IN	p_shipping_address2 VARCHAR(100),
+		IN	p_shipping_company VARCHAR(100),
+		IN	p_shipping_city VARCHAR(100),
+		IN	p_shipping_zip VARCHAR(30),
+		IN	p_shipping_province VARCHAR(30),
+		IN	p_shipping_country VARCHAR(30),
+		IN	p_shipping_phone VARCHAR(30),
+		IN	p_amount VARCHAR(30),
+		IN	p_currency VARCHAR(30),
+
+		IN	p_label_url VARCHAR(100),
+		IN	p_tracking_provider VARCHAR(30),
+		IN	p_tracking_number VARCHAR(30),
+		IN	p_shipping_carrier VARCHAR(30),
+		in  p_shipping_provider VARCHAR(30),
+
+		in  p_width DOUBLE,
+		in  p_height DOUBLE,
+		in  p_length DOUBLE,
+		in  p_weight DOUBLE,
+		in p_size_type int,
+		in p_weight_type int,
+		in p_tracking_status VARCHAR(30)
+
+)
+this_proc:begin
+
+	DECLARE i_id_rate INT default 0;
+	DECLARE i_address INT default 0;
+	DECLARE i_count INT default 0;
+
+	IF p_tracking_status IS NULL THEN
+		SET p_tracking_status = 'PRE_TRANSIT';
+	END IF;
+
+	SELECT count(*) into i_count from orders WHERE  id  = p_order_id and tracking is not null;
+	if (i_count>0) then
+		leave this_proc;
+	end if;
+
+
+
+
+
+
+	-- SELECT `AUTO_INCREMENT` into i_address FROM  INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'phoenix' AND   TABLE_NAME   = 'order_addresses';
+
+	insert into order_addresses
+		(
+			user_id,
+			object_id,
+			city,
+			company,
+			country,
+			name,
+			phone,
+			state,
+			street1,
+			street2,
+			zip,
+			created_at
+		)
+		values
+		(
+			p_user_id,
+			UUID(),
+			p_shipping_city,
+			p_shipping_company,
+			p_shipping_country,
+			p_shipping_name,
+			p_shipping_phone,
+			p_shipping_province,
+			p_shipping_street,
+			p_shipping_address1,
+			p_shipping_zip,
+			SYSDATE()
+
+		);
+
+	SELECT LAST_INSERT_ID() into i_address from dual;
+
+	-- SELECT `AUTO_INCREMENT` into i_id_rate FROM  INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'phoenix' AND   TABLE_NAME   = 'order_rates';
+
+	insert into order_rates
+		(
+
+			  order_id,
+			  is_active,
+			  object_id,
+			  object_owner,
+			  shipment,
+			  provider_image_75,
+			  provider_image_200,
+			  service_name,
+			  estimated_days,
+			  duration_terms,
+			  amount,
+			  currency,
+			  amount_local,
+			  currency_local,
+			  provider,
+			  created_at,
+			  updated_at
+		)
+		values
+		(
+
+				p_order_id,
+				0,
+				UUID(),
+				'owner',
+				'shipment',
+				'img',
+				'img',
+				'service_name',
+				0,
+				'duration_term',
+				p_amount,
+				p_currency,
+				p_amount,
+				p_currency,
+				p_shipping_carrier,
+				SYSDATE(),
+				SYSDATE()
+		);
+
+	SELECT LAST_INSERT_ID() into i_id_rate from dual;
+
+
+	insert into order_transactions
+		(
+			order_id,
+			order_rate_id,
+			shipping_name,
+			shipping_street,
+			shipping_address1,
+			shipping_address2,
+			shipping_company,
+			shipping_city,
+			shipping_zip,
+			shipping_province,
+			shipping_country,
+			shipping_phone,
+			transaction_id,
+			tracking_provider,
+			tracking_number ,
+			tracking_status,
+			created_at,
+			shipping_carrier,
+			label_url,
+			shipping_provider
+		)
+		values
+		(
+			p_order_id,
+			i_id_rate,
+			p_shipping_name,
+			p_shipping_street,
+			p_shipping_address1,
+			p_shipping_address2,
+			p_shipping_company,
+			p_shipping_city,
+			p_shipping_zip,
+			p_shipping_province,
+			p_shipping_country,
+			p_shipping_phone,
+			UUID(),
+			p_tracking_provider,
+			p_tracking_number,
+			p_tracking_status,
+			SYSDATE(),
+			p_shipping_carrier,
+			p_label_url,
+			p_shipping_provider
+
+
+
+
+
+		)
+		;
+
+	update orders set tracking = p_tracking_number, order_address_from_id = i_address where id  = p_order_id;
+	update order_package set width = p_width, height = p_height, length =p_length, weight = p_weight, size_type = p_size_type, weight_type = p_weight_type  where order_id = p_order_id;
+
+
+
+
+
+END

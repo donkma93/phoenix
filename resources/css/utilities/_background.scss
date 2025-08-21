@@ -1,0 +1,19 @@
+@each $color, $value in $colors {
+    .abg-#{$color} {
+        background-color: $value !important;
+    }
+    a.abg-#{$color},
+    button.abg-#{$color} {
+        @include hover-focus() {
+            background-color: darken($value, 10%) !important;
+        }
+    }
+}
+
+.bg-white {
+    background-color: $white !important;
+}
+
+.bg-transparent {
+    background-color: transparent !important;
+}

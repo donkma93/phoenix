@@ -1,0 +1,4 @@
+CREATE DEFINER=`root`@`localhost` PROCEDURE `exportSKU`(in p_user_id INT)
+begin
+	select id, name, (select sku  from inventories where product_id = products.id) as SKU from products where user_id = p_user_id;
+END

@@ -1,0 +1,51 @@
+{
+
+
+
+
+    "All Tags":" All Tags",
+    "add-new-tag":"Add tag",
+    "language": "Language",
+
+    "tracking": "Tracking",
+
+    "search-nav":"Search here",
+
+    "telephone-nav":"Telephone",
+    "sku-nav":"SKU",
+
+
+
+    "setting-bar": "Setting",
+
+    "permission":"Permission",
+    "guard": "Guard",
+
+
+
+    "search":"Search",
+
+    "no_entries_found": "No entries found",
+
+
+    "showing" : "Showing",
+    "to": "to",
+    "of": "of",
+    "entries":"entries",
+    "setting-subtitle":"General options",
+
+    "nodata_found":"No data found",
+
+
+
+
+    "ERROR_INBOUND_COUNT": "Error: quantity cannot greater than IR",
+    "ERROR_TOTE_NOTFOUND" : "Error: Totes not exist",
+
+    "NEW_CUSTOMER" :"New Customers",
+    "NEW_SALES" :"New Sales",
+    "NEW_WEIGHT" :"Weight",
+    "NEWSALE_BY_DATE":"Sale by date",
+    "NEW_STATE":"Stage",
+    "NEW_COUNTRY" :"Sales by Country"
+}

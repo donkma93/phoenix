@@ -1,0 +1,18 @@
+CREATE TABLE `od_orders` (
+  `order_id` int unsigned NOT NULL AUTO_INCREMENT,
+  `shipper_id` int NOT NULL,
+  `receiver_id` int NOT NULL,
+  `commodity` varchar(45) NOT NULL,
+  `service_of_order` varchar(45) NOT NULL,
+  `air_waybill` varchar(100) DEFAULT NULL,
+  `note_total` varchar(1000) DEFAULT NULL,
+  `user_create` int NOT NULL,
+  `user_edit` int DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT NULL,
+  `deleted_at` timestamp NULL DEFAULT NULL,
+  PRIMARY KEY (`order_id`)
+) ENGINE=InnoDB AUTO_INCREMENT=8 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+=======4/9/2024
+ALTER TABLE `phoenix`.`od_orders`
+ADD COLUMN `surcharge` JSON NULL DEFAULT NULL AFTER `deleted_at`;

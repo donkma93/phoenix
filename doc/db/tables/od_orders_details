@@ -1,0 +1,24 @@
+CREATE TABLE `od_orders_details` (
+  `id` int unsigned NOT NULL AUTO_INCREMENT,
+  `order_id` int unsigned NOT NULL,
+  `bill_code_detail` varchar(100) NOT NULL,
+  `type_of_commodity` varchar(100) NOT NULL,
+  `length` float NOT NULL,
+  `width` float NOT NULL,
+  `height` float NOT NULL,
+  `pack_bill_weight` mediumint unsigned NOT NULL,
+  `actual_weight` mediumint unsigned NOT NULL,
+  `bulky_weight` mediumint unsigned NOT NULL,
+  `billable_weight` mediumint unsigned NOT NULL,
+  `note_detail` varchar(1000) DEFAULT NULL,
+  `img_url` varchar(1000) DEFAULT NULL,
+  `deleted_at` timestamp NULL DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB AUTO_INCREMENT=28 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+================= 26/8/2024
+ALTER TABLE `phoenix`.`od_orders_details`
+CHANGE COLUMN `bill_code_detail` `bill_code_detail` VARCHAR(100) NULL DEFAULT NULL ;
+================= 5/9/2024
+ALTER TABLE `phoenix`.`od_orders_details`
+ADD COLUMN `quantity` INT NULL DEFAULT NULL AFTER `height`,
+ADD COLUMN `unit_price` FLOAT NULL DEFAULT NULL AFTER `quantity`;

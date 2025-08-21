@@ -1,0 +1,32 @@
+// stylelint-disable selector-no-qualifying-type
+
+//
+// Base styles
+//
+
+.abtn {
+    display: inline-block;
+    color: $body-color;
+    text-align: center;
+    vertical-align: middle;
+    cursor: pointer;
+    user-select: none;
+    background-color: transparent;
+    border: $border-width solid transparent;
+
+    @include hover() {
+        color: $body-color;
+        text-decoration: none;
+    }
+
+    &:focus,
+    &.focus {
+        outline: 0;
+    }
+
+    // Disabled comes first so active can properly restyle
+    &.disabled,
+    &:disabled {
+        opacity: 0.65;
+    }
+}

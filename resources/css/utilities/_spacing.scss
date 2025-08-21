@@ -1,0 +1,79 @@
+// stylelint-disable declaration-no-important
+
+// Margin and Padding
+
+@each $breakpoint in map-keys($grid-breakpoints) {
+    @include media-breakpoint-up($breakpoint) {
+        $infix: breakpoint-infix($breakpoint, $grid-breakpoints);
+
+        @each $prop, $abbrev in (margin: m, padding: p) {
+            @each $size in $spacers {
+                .a#{$abbrev}#{$infix}-#{$size} {
+                    #{$prop}: #{$size / 16}rem !important;
+                }
+                .a#{$abbrev}t#{$infix}-#{$size},
+                .a#{$abbrev}y#{$infix}-#{$size} {
+                    #{$prop}-top: #{$size / 16}rem !important;
+                }
+                .a#{$abbrev}r#{$infix}-#{$size},
+                .a#{$abbrev}x#{$infix}-#{$size} {
+                    #{$prop}-right: #{$size / 16}rem !important;
+                }
+                .a#{$abbrev}b#{$infix}-#{$size},
+                .a#{$abbrev}y#{$infix}-#{$size} {
+                    #{$prop}-bottom: #{$size / 16}rem !important;
+                }
+                .a#{$abbrev}l#{$infix}-#{$size},
+                .a#{$abbrev}x#{$infix}-#{$size} {
+                    #{$prop}-left: #{$size / 16}rem !important;
+                }
+            }
+        }
+
+        // Negative margins (e.g., where `.mb-n1` is negative version of `.mb-1`)
+        @each $size in $spacers {
+            @if $size != 0 {
+                .am#{$infix}-n#{$size} {
+                    margin: -#{$size / 16}rem !important;
+                }
+                .amt#{$infix}-n#{$size},
+                .amy#{$infix}-n#{$size} {
+                    margin-top: -#{$size / 16}rem !important;
+                }
+                .amr#{$infix}-n#{$size},
+                .amx#{$infix}-n#{$size} {
+                    margin-right: -#{$size / 16}rem !important;
+                }
+                .amb#{$infix}-n#{$size},
+                .amy#{$infix}-n#{$size} {
+                    margin-bottom: -#{$size / 16}rem !important;
+                }
+                .aml#{$infix}-n#{$size},
+                .amx#{$infix}-n#{$size} {
+                    margin-left: -#{$size / 16}rem !important;
+                }
+            }
+        }
+
+        // Some special margin utils
+        .am#{$infix}-auto {
+            margin: auto !important;
+        }
+        .amt#{$infix}-auto,
+        .amy#{$infix}-auto {
+            margin-top: auto !important;
+        }
+        .amr#{$infix}-auto,
+        .amx#{$infix}-auto {
+            margin-right: auto !important;
+        }
+        .amb#{$infix}-auto,
+        .amy#{$infix}-auto {
+            margin-bottom: auto !important;
+        }
+        .aml#{$infix}-auto,
+        .amx#{$infix}-auto {
+            margin-left: auto !important;
+        }
+    }
+}

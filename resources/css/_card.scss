@@ -1,0 +1,13 @@
+.total-card {
+    .card:hover {
+        background-color: #F9FAF9;
+    }
+}
+
+.total-card {
+    .card:hover {
+        .card-footer {
+            background-color: #F9FAF9;
+        }
+    }
+}

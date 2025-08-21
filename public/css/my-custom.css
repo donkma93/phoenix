@@ -1,0 +1,7 @@
+.form-group.invalid .form_message {
+    color: #dc3545 !important;
+}
+
+.form-group.invalid .form-control {
+    border-color: #dc3545 !important;
+}

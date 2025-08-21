@@ -1,0 +1,51 @@
+* {
+    box-sizing: border-box !important;
+}
+
+body, html {
+    margin: 0 !important;
+    background-color: #fff !important;
+}
+
+@media print {
+    .pagebreak { page-break-before: always; } /* page-break-after works, as well */
+}
+
+.item {
+    margin-top: 20px;
+    border-bottom: 1px solid gray;
+    padding-bottom: 28px;
+}
+
+.code {
+    font-weight: bold;
+}
+
+div.barcodeVal1 {
+    font-weight: normal;
+    font-style: normal;
+    line-height: normal;
+    font-size: 16px !important;
+}
+
+div.barcodeVal1 {
+    text-align: center;
+}
+
+.humanReadable2 {
+    text-align: center;
+    font-weight: bold;
+    font-size: 32px;
+}
+
+div.barcodeVal2 {
+    text-align: center;
+    font-weight: normal;
+    font-style: normal;
+    line-height: normal;
+    font-size: 32px;
+}
+
+div.barcodeVal2 > image {
+    width: 80% !important;
+}

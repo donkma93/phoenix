@@ -1,0 +1,28 @@
+CREATE DEFINER=`root`@`localhost` PROCEDURE `exportOrder`(IN `pDateF` VARCHAR(20), IN `pDateT` VARCHAR(20))
+SELECT
+		odr.id,
+		odr.order_number ,
+		odr_rate.amount,
+		CONCAT('\'' , odr_tran.tracking_number) tracking,
+		odr_rate.provider,
+		odr.partner_code,
+		addr.zip,
+        addr.name as receiver_name,
+		CONCAT( addr.street1, ', ' , addr.city, ',', addr.state,  ',', addr.country) ADDR,
+		pkg.weight,
+		pkg.width,
+		pkg.height,
+		pkg.length,
+		(SELECT GROUP_CONCAT(DISTINCT name
+        ORDER BY name ASC
+        SEPARATOR ';') from products WHERE id in (SELECT product_id  from order_product WHERE order_product.order_id = odr.id)) ITEM,
+        odr.created_at
+
+FROM
+	orders odr
+	INNER JOIN order_package pkg ON odr.id = pkg.order_id
+	INNER JOIN order_addresses addr ON addr.id = odr.order_address_to_id
+    INNER JOIN order_transactions odr_tran  ON odr.id = odr_tran.order_id
+    INNER JOIN order_rates odr_rate ON odr_tran.order_rate_id  = odr_rate.id
+
+where odr_tran.created_at  between STR_TO_DATE(pDateF, '%Y-%m-%d') and DATE_ADD(STR_TO_DATE(pDateT, '%Y-%m-%d'), INTERVAL 1 DAY)

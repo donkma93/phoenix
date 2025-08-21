@@ -1,0 +1,19 @@
+@each $color, $value in $colors {
+    .atext-#{$color} {
+        color: $value !important;
+    }
+    @if $emphasized-link-hover-darken-percentage != 0 {
+        a.atext-#{$color} {
+            @include hover-focus() {
+                color: darken(
+                    $value,
+                    $emphasized-link-hover-darken-percentage
+                ) !important;
+            }
+        }
+    }
+}
+
+.fw-medium {
+    font-weight: 500;
+}

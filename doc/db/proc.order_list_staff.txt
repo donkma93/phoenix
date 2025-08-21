@@ -1,0 +1,124 @@
+CREATE DEFINER=`root`@`localhost` PROCEDURE `order_list_staff`(
+	IN `pDateF` VARCHAR(20),
+	IN `pDateT` VARCHAR(20),
+	in p_picking INT
+	)
+begin
+
+	select
+		odr.picking_status, count(odr.id) as count
+    from
+		orders odr
+		INNER JOIN order_package pkg ON odr.id = pkg.order_id
+		INNER JOIN order_addresses addr ON addr.id = odr.order_address_to_id
+		LEFT JOIN order_transactions odr_tran  ON odr.id = odr_tran.order_id
+		LEFT JOIN order_rates odr_rate ON odr_tran.order_rate_id  = odr_rate.id
+    where
+		odr.created_at  between STR_TO_DATE(pDateF, '%Y-%m-%d') and DATE_ADD(STR_TO_DATE(pDateT, '%Y-%m-%d'), INTERVAL 1 day)
+	group by picking_status;
+
+	-- 99 SELECT ALL
+	if p_picking = 99 then
+
+		SELECT
+				odr.id,
+                odr.order_code,
+                odr.picking_status,
+				odr.order_number,
+			    odr_rate.amount,
+				odr_tran.tracking_number,
+				odr_tran.label_url ,
+				odr_rate.provider,
+			    odr.partner_code,
+				addr.zip,
+				addr.name,
+				CONCAT( addr.street1, ', ' , addr.city, ',', addr.state,  ',', addr.country) addr,
+				pkg.weight,
+				pkg.width,
+				pkg.height,
+				pkg.length,
+                pkg.weight_type,
+				pkg.size_type,
+				(
+					SELECT GROUP_CONCAT(DISTINCT name
+		        	ORDER BY name ASC
+		        	SEPARATOR ';') from products WHERE id in (SELECT product_id  from order_product WHERE order_product.order_id = odr.id)
+		        ) item,
+		        odr_prod.quantity,
+		        odr.created_at,
+				odr_tran.created_at AS transactions_created_at,
+				odr_tran.id AS transactions_id,
+				odr_rate.id AS odr_rate_id,
+				odr.order_address_to_id,
+                users.email AS user_email,
+                users.partner_code,
+
+                (select count(*)  from  order_journey left join packing_list on packing_list.id = id_packing_list where  order_id = odr.id and id_packing_list is not null and packing_list.status = 10) as count_pkl
+
+
+		FROM
+			orders odr
+			INNER JOIN order_package pkg ON odr.id = pkg.order_id
+			INNER JOIN order_addresses addr ON addr.id = odr.order_address_to_id
+            LEFT JOIN order_product odr_prod ON odr.id = odr_prod.order_id
+		    LEFT JOIN order_transactions odr_tran  ON odr.id = odr_tran.order_id
+		    LEFT JOIN order_rates odr_rate ON odr_tran.order_rate_id  = odr_rate.id
+		    LEFT JOIN users ON users.id  = odr.user_id
+
+		where
+			odr.deleted_at IS NULL AND
+			odr.created_at  between STR_TO_DATE(pDateF, '%Y-%m-%d') and DATE_ADD(STR_TO_DATE(pDateT, '%Y-%m-%d'), INTERVAL 1 DAY)
+		order by odr.created_at desc;
+	else
+			SELECT
+					odr.id,
+					odr.order_code,
+					odr.picking_status,
+					odr.order_number,
+				    odr_rate.amount,
+					odr_tran.tracking_number,
+					odr_tran.label_url ,
+					odr_rate.provider,
+				    odr.partner_code,
+					addr.zip,
+					addr.name,
+					CONCAT( addr.street1, ', ' , addr.city, ',', addr.state,  ',', addr.country) addr,
+					pkg.weight,
+					pkg.width,
+					pkg.height,
+					pkg.length,
+                    pkg.weight_type,
+                    pkg.size_type,
+					(
+						SELECT GROUP_CONCAT(DISTINCT name
+			        	ORDER BY name ASC
+			        	SEPARATOR ';') from products WHERE id in (SELECT product_id  from order_product WHERE order_product.order_id = odr.id)
+			        ) item,
+					odr_prod.quantity,
+			        odr.created_at,
+			        odr_tran.created_at AS transactions_created_at,
+                    odr_tran.id AS transactions_id,
+                    odr_rate.id AS odr_rate_id,
+                    odr.order_address_to_id,
+					users.email AS user_email,
+					users.partner_code,
+					(select count(*)  from  order_journey left join packing_list on packing_list.id = id_packing_list where  order_id = odr.id and id_packing_list is not null and packing_list.status = 10) as count_pkl
+
+
+			FROM
+				orders odr
+				INNER JOIN order_package pkg ON odr.id = pkg.order_id
+				INNER JOIN order_addresses addr ON addr.id = odr.order_address_to_id
+				LEFT JOIN order_product odr_prod ON odr.id = odr_prod.order_id
+			    LEFT JOIN order_transactions odr_tran  ON odr.id = odr_tran.order_id
+			    LEFT JOIN order_rates odr_rate ON odr_tran.order_rate_id  = odr_rate.id
+				LEFT JOIN users ON users.id  = odr.user_id
+
+			where
+				odr.deleted_at IS NULL AND
+				odr.created_at  between STR_TO_DATE(pDateF, '%Y-%m-%d') and DATE_ADD(STR_TO_DATE(pDateT, '%Y-%m-%d'), INTERVAL 1 DAY) and
+				odr.picking_status = p_picking
+			order by odr.created_at desc;
+
+	end if;
+END

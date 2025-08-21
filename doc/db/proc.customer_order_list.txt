@@ -1,0 +1,43 @@
+CREATE DEFINER=`root`@`localhost` PROCEDURE `customer_order_list`(IN `pDateF` VARCHAR(20), IN `pDateT` VARCHAR(20), in pUSERID INT)
+begin
+
+
+	SELECT
+			odr.id,
+            odr.order_code,
+			odr.order_number ,
+			odr_rate.amount,
+			odr_tran.shipping_carrier,
+			CONCAT('\'' , odr_tran.tracking_number) tracking,
+			odr_rate.provider,
+		    odr.partner_code,
+			addr.zip,
+            addr.name as receiver_name,
+			CONCAT( addr.street1, ', ' , addr.city, ',', addr.state,  ',', addr.country) ADDR,
+			pkg.weight,
+			pkg.width,
+			pkg.height,
+			pkg.length,
+			(SELECT GROUP_CONCAT(DISTINCT name
+	        ORDER BY name ASC
+	        SEPARATOR ';') from products WHERE id in (SELECT product_id  from order_product WHERE order_product.order_id = odr.id)) ITEM,
+	        odr.created_at,
+            odr_pro.quantity
+
+	FROM
+		orders odr
+		INNER JOIN order_package pkg ON odr.id = pkg.order_id
+		INNER JOIN order_addresses addr ON addr.id = odr.order_address_to_id
+	    LEFT JOIN order_transactions odr_tran  ON odr.id = odr_tran.order_id
+	    LEFT JOIN order_rates odr_rate ON odr_tran.order_rate_id  = odr_rate.id
+	    LEFT JOIN order_product odr_pro ON odr_pro.order_id  = odr.id
+
+	where
+		odr.user_id = pUSERID and
+		odr.created_at  between STR_TO_DATE(pDateF, '%Y-%m-%d') and DATE_ADD(STR_TO_DATE(pDateT, '%Y-%m-%d'), INTERVAL 1 DAY)
+	order by odr.created_at desc;
+
+
+
+
+END

@@ -1,0 +1,45 @@
+{
+
+
+
+
+    "All Tags":" Tất cả Tags",
+    "add-new-tag":"Thêm mới tag",
+    "language": "Ngôn ngữ",
+
+
+    "tracking": "Vận đơn",
+
+    "search-nav":"Tìm kiếm",
+    "telephone-nav":"Số điện thoại",
+    "sku-nav":"Mã SKU",
+
+
+    "setting-bar": "Cài đặt",
+    "permission":"Quyền",
+    "guard": "Guard",
+
+
+    "search":"Tìm kiếm",
+    "no_entries_found": "Không thấy kết quả nào",
+
+    "showing" : "Hiển thị",
+    "to": "tới",
+    "of": "của",
+    "entries":"dòng",
+    "setting-subtitle":"thiết lập chung",
+    "nodata_found":"Không có dữ liệu",
+
+
+    "ERROR_INBOUND_COUNT": "LỖI: Không được nhập số lượng lớn hơn tổng IR",
+    "ERROR_TOTE_NOTFOUND" : "LỖI: Tote không tồn tại",
+
+
+
+    "NEW_CUSTOMER" :"Khách hàng mới",
+    "NEW_SALES" :"Đơn hàng mới",
+    "NEW_WEIGHT" :"Khối lượng",
+    "NEWSALE_BY_DATE":"Đơn Theo Ngày",
+    "NEW_STATE":"Trạng Thái Đơn",
+    "NEW_COUNTRY" :"Đơn theo nước"
+}
