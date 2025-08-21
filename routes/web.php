@@ -438,6 +438,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::get('/orders', [StaffOrderController::class, 'list'])->name('orders.list')
             ->middleware('role:picker,packer,receiver,staff,staff-epacket');
 
+        Route::post('/orders/download-previews', [StaffOrderController::class, 'downloadPreviews'])->name('orders.downloadPreviews')
+            ->middleware('role:picker,packer,receiver,staff,staff-epacket');
+
 
         // Route::get('/orders/print', [StaffOrderController::class, 'orderPrintMultiple'])->name('orders.orderPrintMultiple')
         // ->middleware('role:picker,packer,receiver,staff,staff-epacket');

@@ -1505,4 +1505,96 @@ class StaffOrderController extends StaffBaseController
             'message' => 'Order ' . $orderId . ' not found.',
         ]);
     }
+
+    public function downloadPreviews(Request $request)
+    {
+        try {
+            $orderIds = $request->input('order_ids', []);
+
+            // Allow JSON string from hidden input, or array from multiple inputs
+            if (is_string($orderIds)) {
+                $decoded = json_decode($orderIds, true);
+                if (json_last_error() === JSON_ERROR_NONE) {
+                    $orderIds = $decoded;
+                }
+            }
+
+            if (!is_array($orderIds) || count($orderIds) === 0) {
+                return back()->with('error', 'Please select at least one order.');
+            }
+
+            // Normalize to list of integers
+            $orderIds = array_values(array_filter(array_map('intval', $orderIds), function($v){ return $v > 0; }));
+            if (count($orderIds) === 0) {
+                return back()->with('error', 'Please select at least one order.');
+            }
+
+            $rows = DB::table('order_transactions')
+                ->select('order_id', 'label_url')
+                ->whereIn('order_id', $orderIds)
+                ->whereNotNull('label_url')
+                ->get();
+
+            if ($rows->count() === 0) {
+                return back()->with('error', 'No preview files found for selected orders.');
+            }
+
+            $zipFileName = 'previews-' . date('YmdHis') . '.zip';
+            $zipFullPath = storage_path('app/' . $zipFileName);
+
+            if (file_exists($zipFullPath)) {
+                @unlink($zipFullPath);
+            }
+
+            $zip = new \ZipArchive();
+            if ($zip->open($zipFullPath, \ZipArchive::CREATE) !== true) {
+                return back()->with('error', 'Cannot create zip file.');
+            }
+
+            foreach ($rows as $row) {
+                $labelUrl = $row->label_url;
+                if (!$labelUrl) {
+                    continue;
+                }
+
+                $pathPart = parse_url($labelUrl, PHP_URL_PATH) ?? $labelUrl;
+                $ext = pathinfo($pathPart, PATHINFO_EXTENSION);
+                if (!$ext) {
+                    $ext = 'pdf';
+                }
+                $zipName = 'order_' . $row->order_id . '.' . $ext;
+
+                // Remote URL
+                if (stripos($labelUrl, 'http://') === 0 || stripos($labelUrl, 'https://') === 0) {
+                    try {
+                        $content = @file_get_contents($labelUrl);
+                        if ($content !== false) {
+                            $zip->addFromString($zipName, $content);
+                        }
+                    } catch (\Exception $e) {
+                        // skip on error
+                    }
+                    continue;
+                }
+
+                // Local file under public
+                $localPath = public_path(ltrim($labelUrl, '/'));
+                if (file_exists($localPath)) {
+                    $zip->addFile($localPath, $zipName);
+                    continue;
+                }
+            }
+
+            $zip->close();
+
+            if (!file_exists($zipFullPath)) {
+                return back()->with('error', 'Failed to create archive.');
+            }
+
+            return response()->download($zipFullPath)->deleteFileAfterSend(true);
+        } catch (Exception $e) {
+            Log::error($e);
+            return back()->with('error', 'Unexpected error while preparing downloads.');
+        }
+    }
 }

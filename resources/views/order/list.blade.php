@@ -251,11 +251,19 @@
             <div class="col-md-12">
                 <div class="card">
                     <div class="card-footer">
+                        <div class="mb-3 d-flex justify-content-end">
+                            <form id="bulk-download-form" method="POST" action="{{ route('staff.orders.downloadPreviews') }}">
+                                @csrf
+                                <input type="hidden" name="order_ids" id="bulk-order-ids" value="">
+                                <button type="submit" class="btn btn-primary btn-round" id="btn-download-previews">Download Previews</button>
+                            </form>
+                        </div>
                         @if (count($orders))
                             <div class="table-responsive">
                                 <table class="table" id="datatable">
                                     <thead class="text-primary">
                                         <tr>
+                                            <th class="text-center"><input type="checkbox" id="select-all"></th>
                                             <th>{{ __('ID') }}</th>
                                             <th>{{ __('Order Code') }}</th>
                                             <th>{{ __("Customer's Order") }}</th>
@@ -275,6 +283,7 @@
                                     <tbody>
                                         @foreach ($orders as $order)
                                             <tr>
+                                                <td class="text-center"><input type="checkbox" class="order-checkbox" value="{{ $order->id }}"></td>
                                                 <td>{{ $order->id }}</td>
                                                 <td>
                                                     <p title="BILL" style="margin: 0"> {{ $order->order_code ?? '' }}</p>
@@ -753,9 +762,41 @@
                     searchPlaceholder: "Search records",
                 },
                 "aaSorting": [],
+                columnDefs: [
+                    { targets: 0, orderable: false }
+                ],
                 // "ordering": false,
             });
 
+
+            // Select all handler
+            $(document).on('change', '#select-all', function() {
+                const checked = $(this).is(':checked');
+                $('.order-checkbox').prop('checked', checked);
+            });
+
+            // Row checkbox sync with select-all
+            $(document).on('change', '.order-checkbox', function() {
+                const total = $('.order-checkbox').length;
+                const selected = $('.order-checkbox:checked').length;
+                $('#select-all').prop('checked', total > 0 && selected === total);
+                if (selected < total) {
+                    $('#select-all').prop('indeterminate', selected > 0);
+                } else {
+                    $('#select-all').prop('indeterminate', false);
+                }
+            });
+
+            // Bulk download: gather selected IDs into hidden input as JSON
+            $('#bulk-download-form').on('submit', function(e) {
+                const ids = $('.order-checkbox:checked').map(function(){ return $(this).val(); }).get();
+                if (ids.length === 0) {
+                    e.preventDefault();
+                    alert('Please select at least one order.');
+                    return false;
+                }
+                $('#bulk-order-ids').val(JSON.stringify(ids));
+            });
 
             // Delete order, label
             /*$('.delete-order').click(function () {
