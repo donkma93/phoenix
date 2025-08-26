@@ -1506,6 +1506,38 @@ class StaffOrderController extends StaffBaseController
         ]);
     }
 
+    public function getLabelUrlByOrderId(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'order_id' => 'required|integer|min:1'
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => 'error',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        $orderId = (int) $request->input('order_id');
+        $labelUrl = DB::table('order_transactions')->where('order_id', $orderId)->value('label_url');
+
+        if ($labelUrl) {
+            return response()->json([
+                'status' => 'success',
+                'order_id' => $orderId,
+                'label_url' => $labelUrl
+            ]);
+        }
+
+        return response()->json([
+            'status' => 'error',
+            'order_id' => $orderId,
+            'label_url' => null,
+            'message' => 'Label URL not found for this order.'
+        ], 404);
+    }
+
     public function downloadPreviews(Request $request)
     {
         try {

@@ -132,6 +132,7 @@ Route::middleware(['jwt.verify'])->group(function () {
     Route::prefix('v1')->group(function () {
         Route::post('/check-tracking-exist', [StaffOrderController::class, 'checkTrackingExist']);
         Route::post('/update-tracking-info-by-order-id', [StaffOrderController::class, 'updateTrackingInfoByOrderId']);
+        Route::post('/get-label-url-by-order-id', [StaffOrderController::class, 'getLabelUrlByOrderId']);
     });
 });
 
