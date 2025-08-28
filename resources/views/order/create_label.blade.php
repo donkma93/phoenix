@@ -1015,7 +1015,7 @@
                 // upload file
                 var fd = new FormData();
                 var order_id = "{{ $order->id }}";
-
+                console.log(this.files[0]);
                 // Append data
                 fd.append('file', this.files[0]);
                 fd.append('order_id', "{{ $order->id }}");
@@ -1036,6 +1036,7 @@
                         // window.location.reload();
                         // alert("Tải lên file thành công!");
                         let label_path = response.filepath;
+                        console.log(response);
                         $('.label_path').each(function() {
                             $(this).val(label_path);
                             if ($(this).hasClass('label_path_disable')) {

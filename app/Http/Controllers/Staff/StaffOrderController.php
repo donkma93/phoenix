@@ -165,9 +165,9 @@ class StaffOrderController extends StaffBaseController
 
         $validator = Validator::make($request->all(), [
             'order_id' => 'required',
-            'file' => 'required',
+            'file' => 'required|file',
         ]);
-
+        
         if ($validator->fails()) {
 
             $data['success'] = 0;
@@ -205,22 +205,46 @@ class StaffOrderController extends StaffBaseController
 
 
                 // Lưu trên S3
-                $ext = $file->extension();
-                $extension = $file->getClientOriginalExtension();
-                $old_name = $file->getClientoriginalName();
-                $new_name = 'PNX_LABEL/' . date('Ym') . '/' . time() . '_' . rand(100000, 999999) . '_' . $this->clean_str($old_name, '/[^0-9a-zA-Z._-]/');
-                $path = Storage::disk('s3')->put($new_name, file_get_contents($file), 'public');
-                $pathImg = 'https://leuleu-ffm.hn.ss.bfcplatform.vn' . '/' . $new_name;
-                $this->orderService->saveOrderFileUrl($orderId, $pathImg);
+                // $ext = $file->extension();
+                // $extension = $file->getClientOriginalExtension();
+                // $old_name = $file->getClientoriginalName();
+                // $new_name = 'PNX_LABEL/' . date('Ym') . '/' . time() . '_' . rand(100000, 999999) . '_' . $this->clean_str($old_name, '/[^0-9a-zA-Z._-]/');
+                // $path = Storage::disk('s3')->put($new_name, file_get_contents($file), 'public');
+                // $pathImg = 'https://leuleu-ffm.hn.ss.bfcplatform.vn' . '/' . $new_name;
+                // $this->orderService->saveOrderFileUrl($orderId, $pathImg);
 
-                // Response
-                $data['success'] = 1;
-                $data['message'] = 'Uploaded Successfully!';
-                $data['order_id'] = $orderId;
-                $data['filepath'] = $pathImg;
-                //$data['filepath'] = $http_host . $fileKey;
-                //$data['label_url'] = request()->getHost() . $fileKey;
-                $data['extension'] = $extension;
+                // // Response
+                // $data['success'] = 1;
+                // $data['message'] = 'Uploaded Successfully!';
+                // $data['order_id'] = $orderId;
+                // $data['filepath'] = $pathImg;
+                // //$data['filepath'] = $http_host . $fileKey;
+                // //$data['label_url'] = request()->getHost() . $fileKey;
+                // $data['extension'] = $extension;
+                $ext = $file->extension(); // Đuôi file theo mime-type
+$extension = $file->getClientOriginalExtension(); // Đuôi gốc
+$old_name = $file->getClientOriginalName(); // Tên gốc
+
+// Tạo tên file mới và folder
+$folder = 'uploads/PNX_LABEL/' . date('Ym');
+$cleaned_name = $this->clean_str($old_name, '/[^0-9a-zA-Z._-]/');
+$new_name = time() . '_' . rand(100000, 999999) . '_' . $cleaned_name;
+
+// Lưu file vào storage/app/public/...
+$path = Storage::disk('public')->putFileAs($folder, $file, $new_name);
+
+// Tạo đường dẫn URL public
+$pathImg = asset('storage/' . $folder . '/' . $new_name);
+
+// Gọi service lưu DB
+$this->orderService->saveOrderFileUrl($orderId, $pathImg);
+
+// Trả về client
+$data['success'] = 1;
+$data['message'] = 'Uploaded Successfully!';
+$data['order_id'] = $orderId;
+$data['filepath'] = $pathImg;
+$data['extension'] = $extension;
             } else {
                 // Response
                 $data['success'] = 2;
@@ -310,7 +334,7 @@ class StaffOrderController extends StaffBaseController
             $role = Auth::user()->role;
             Log::error('========== LOG deleteLabel (1): Order_id: ' . $order_id . ', role: ' . $role);
 
-            if ($role === 0 || $role === 1) {
+            if ($role == 0 || $role == 1) {
                 $deleteSuccess = false;
                 $result = [];
                 Log::error('========== LOG deleteLabel (2)');
@@ -345,7 +369,7 @@ class StaffOrderController extends StaffBaseController
 
 
                 // Nếu label mua qua G7 thì gọi API delete order
-                if (strtolower($provider) === 'g7') {
+                if (strtolower($provider) == 'g7') {
                     Log::error('========== LOG deleteLabel (3): tracking provider: ' . $tracking_provider);
 
                     // Gọi API Login G7
@@ -419,9 +443,9 @@ class StaffOrderController extends StaffBaseController
 
                         return response()->json($result);
                     }
-                } elseif (strtolower($provider) === 'shippo') {
+                } elseif (strtolower($provider) == 'shippo') {
                     $transaction_id = DB::table('order_transactions')->where('order_id', $order_id)->value('transaction_id');
-
+                   
                     $labelInfo = Shippo_Transaction::retrieve($transaction_id);
                     if (is_string($labelInfo)) {
                         Log::info("LABEL INFO: " . $labelInfo);
@@ -1504,38 +1528,6 @@ class StaffOrderController extends StaffBaseController
             'status' => 'error',
             'message' => 'Order ' . $orderId . ' not found.',
         ]);
-    }
-
-    public function getLabelUrlByOrderId(Request $request)
-    {
-        $validator = Validator::make($request->all(), [
-            'order_id' => 'required|integer|min:1'
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json([
-                'status' => 'error',
-                'errors' => $validator->errors()
-            ], 422);
-        }
-
-        $orderId = (int) $request->input('order_id');
-        $labelUrl = DB::table('order_transactions')->where('order_id', $orderId)->value('label_url');
-
-        if ($labelUrl) {
-            return response()->json([
-                'status' => 'success',
-                'order_id' => $orderId,
-                'label_url' => $labelUrl
-            ]);
-        }
-
-        return response()->json([
-            'status' => 'error',
-            'order_id' => $orderId,
-            'label_url' => null,
-            'message' => 'Label URL not found for this order.'
-        ], 404);
     }
 
     public function downloadPreviews(Request $request)

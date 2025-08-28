@@ -61,12 +61,14 @@ class UserOrderService extends UserBaseService implements UserBaseServiceInterfa
             foreach ($import->rows as $key => $row) {
                 $orderId = 0;
                 $orderAddressTo = OrderAddress::create($import->addresses[$key]);
-
+                
                 if (!isset($row['order_number']) || !in_array($row['order_number'], $orderNumbers)) {
+                    
+                    $orderNumber = isset($row['order_number']) ? trim($row['order_number']) : null;
                     $newOrder = Order::create([
                         'date' => $row['created_at'] ?? null,  // TODO: need convert Timezone when save (?)
                         'order_address_to_id' => $orderAddressTo->id,
-                        'order_number' => $row['order_number'] ?? null,
+                        'order_number' => $orderNumber,
 
                         'item_quantity' => $row['lineitem_quantity'],
                         'item_name' => $row['lineitem_name'],
@@ -88,7 +90,7 @@ class UserOrderService extends UserBaseService implements UserBaseServiceInterfa
                         'content' => $row,
                         'file' => $fileMove,
                     ]);
-
+                    
                     if (isset($row['order_number'])) {
                         array_push($orderNumbers, $row['order_number']);
                         array_push($orderIds, $newOrder->id);
@@ -101,7 +103,7 @@ class UserOrderService extends UserBaseService implements UserBaseServiceInterfa
                 }
 
                 $targetProduct = $products[$row['lineitem_name']];
-
+               
                 $orderProducts[] = [
                     'order_id' => $orderId,
                     'product_id' => $targetProduct->id,
