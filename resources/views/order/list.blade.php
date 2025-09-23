@@ -176,7 +176,7 @@
                                         <div class="col-sm-8">
                                             <div class="form-group">
                                                 <input type="text" class="form-control datepicker" id="date_from"
-                                                    value="{{ old('date_from') ?? date('Y-m-d', strtotime('-1 week')) }}"
+                                                    value="{{ old('date_from') ?? date('Y-m-d', strtotime('-1 month')) }}"
                                                     name="date_from" placeholder="YYYY-MM-DD" />
                                             </div>
                                         </div>

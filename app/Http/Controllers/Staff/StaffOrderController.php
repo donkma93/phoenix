@@ -43,7 +43,7 @@ class StaffOrderController extends StaffBaseController
     {
         try {
             $input_data = $request->all();
-            $date_from = $input_data['date_from'] ?? date('Y-m-d', strtotime('-1 week'));
+            $date_from = $input_data['date_from'] ?? date('Y-m-d', strtotime('-1 month'));
             $date_to = $input_data['date_to'] ?? date('Y-m-d');
             $order_status = $input_data['bill_status'] ?? 99; // 99 là lấy tất cả
 
