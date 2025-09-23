@@ -485,6 +485,7 @@ $data['extension'] = $extension;
 
                 $provider = DB::table('order_transactions')->where('order_id', $order_id)->value('shipping_provider');
                 $tracking_provider = DB::table('order_transactions')->where('order_id', $order_id)->value('tracking_provider');
+                $providerLower = $provider ? strtolower($provider) : '';
 
                 /*DB::table('order_transactions')->where('order_id', $order_id)->delete();
 
@@ -500,7 +501,7 @@ $data['extension'] = $extension;
 
 
                 // Nếu label mua qua G7 thì gọi API delete order
-                if (strtolower($provider) == 'g7') {
+                if ($providerLower === 'g7') {
                     Log::error('========== LOG deleteLabel (3): tracking provider: ' . $tracking_provider);
 
                     // Gọi API Login G7
@@ -574,23 +575,39 @@ $data['extension'] = $extension;
 
                         return response()->json($result);
                     }
-                } elseif (strtolower($provider) == 'shippo') {
-                    $transaction_id = DB::table('order_transactions')->where('order_id', $order_id)->value('transaction_id');
-                   
-                    $labelInfo = Shippo_Transaction::retrieve($transaction_id);
-                    if (is_string($labelInfo)) {
-                        Log::info("LABEL INFO: " . $labelInfo);
-                    } else {
-                        Log::info("LABEL INFO: " . json_encode($labelInfo));
-                    }
-                    if (strtoupper((json_decode($labelInfo))->status) === 'REFUNDED' || strtoupper((json_decode($labelInfo))->status) === 'REFUNDPENDING') {
-                        $deleteSuccess = true;
-                    } else {
-                        try {
-                            $refund = Shippo_Refund::create( array("transaction" => $transaction_id, "async" => false));
-                            Log::info('Refund label shippo:');
-                            Log::info($refund);
-                            if (strtoupper((json_decode($refund))->status) !== 'ERROR') {
+                } elseif ($providerLower === 'shippo') {
+                    try {
+                        $transaction_id = DB::table('order_transactions')->where('order_id', $order_id)->value('transaction_id');
+                        $labelInfo = Shippo_Transaction::retrieve($transaction_id);
+                        Log::info('LABEL INFO: ' . (is_string($labelInfo) ? $labelInfo : json_encode($labelInfo)));
+
+                        $statusVal = null;
+                        if (is_string($labelInfo)) {
+                            $decoded = json_decode($labelInfo);
+                            $statusVal = $decoded->status ?? null;
+                        } elseif (is_object($labelInfo)) {
+                            $statusVal = $labelInfo->status ?? null;
+                        } elseif (is_array($labelInfo)) {
+                            $statusVal = $labelInfo['status'] ?? null;
+                        }
+
+                        if ($statusVal && in_array(strtoupper($statusVal), ['REFUNDED', 'REFUNDPENDING'])) {
+                            $deleteSuccess = true;
+                        } else {
+                            $refund = Shippo_Refund::create(["transaction" => $transaction_id, "async" => false]);
+                            Log::info('Refund label shippo: ' . (is_string($refund) ? $refund : json_encode($refund)));
+
+                            $refundStatus = null;
+                            if (is_string($refund)) {
+                                $decRefund = json_decode($refund);
+                                $refundStatus = $decRefund->status ?? null;
+                            } elseif (is_object($refund)) {
+                                $refundStatus = $refund->status ?? null;
+                            } elseif (is_array($refund)) {
+                                $refundStatus = $refund['status'] ?? null;
+                            }
+
+                            if (strtoupper((string)$refundStatus) !== 'ERROR') {
                                 $deleteSuccess = true;
                             } else {
                                 $result = [
@@ -598,11 +615,13 @@ $data['extension'] = $extension;
                                     'message' => 'Remove label failed, please check API!'
                                 ];
                             }
-                        } catch (Exception $e2){
-                            $deleteSuccess = true;
-                            Log::error($e2->getMessage());
                         }
+                    } catch (Exception $e2){
+                        Log::error('SHIPPO delete error: ' . $e2->getMessage());
+                        $deleteSuccess = true;
                     }
+                } else {
+                    $deleteSuccess = true; // proceed local cleanup for unknown provider
                 }
 
                 if ($deleteSuccess) {
