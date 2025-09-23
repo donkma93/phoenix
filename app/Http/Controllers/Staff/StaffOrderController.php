@@ -108,9 +108,18 @@ class StaffOrderController extends StaffBaseController
             $recordsTotal = $all->count();
 
             if ($searchValue !== '') {
-                $all = $all->filter(function ($row) use ($searchValue) {
+                $terms = array_values(array_filter(array_map('trim', explode(',', $searchValue)), function($v){ return $v !== ''; }));
+                if (count($terms) === 0) {
+                    $terms = [$searchValue];
+                }
+                $all = $all->filter(function ($row) use ($terms) {
                     $orderCode = isset($row->order_code) ? (string)$row->order_code : '';
-                    return stripos($orderCode, $searchValue) !== false;
+                    foreach ($terms as $t) {
+                        if ($t !== '' && stripos($orderCode, $t) !== false) {
+                            return true;
+                        }
+                    }
+                    return false;
                 });
             }
 
@@ -425,53 +434,19 @@ $data['extension'] = $extension;
         return Excel::download($export, $fileName);
     }
 
-    public function detail($id)
+    protected function doDeleteLabel($order_id)
     {
         try {
-            $item = $this->orderService->detail($id);
-
-            //return view('staff.order.detail', $item);
-            return view('order.detail', $item);
-        } catch (Exception $e) {
-            Log::error($e);
-            //TODO redirect to error page
-            abort(500);
-        }
-    }
-
-    public function new($id)
-    {
-        try {
-            $data = $this->orderService->new($id);
-            $countries = DB::table('sys_country')->get()->toArray();
-            //$states = DB::table('sys_states')->get()->toArray();
-            //$cities = DB::table('sys_cities')->get()->toArray();
-            $data['countries'] = $countries ?? [];
-            $data['states'] = $states ?? [];
-            $data['cities'] = $cities ?? [];
-
-            return view('order.new', $data);
-        } catch (Exception $e) {
-            Log::error($e);
-            //TODO redirect to error page
-            abort(500);
-        }
-    }
-
-    public function deleteLabel($order_id)
-    {
-        try {
-            Log::error('========== LOG START deleteLabel ===================================================================');
+            Log::error('========== LOG START doDeleteLabel ===================================================================');
             $role = Auth::user()->role;
-            Log::error('========== LOG deleteLabel (1): Order_id: ' . $order_id . ', role: ' . $role);
+            Log::error('========== LOG doDeleteLabel (1): Order_id: ' . $order_id . ', role: ' . $role);
 
             if ($role == 0 || $role == 1) {
                 $deleteSuccess = false;
                 $result = [];
-                Log::error('========== LOG deleteLabel (2)');
+                Log::error('========== LOG doDeleteLabel (2)');
                 DB::beginTransaction();
 
-                // Ktra xem order đã đóng trong packinglist nào ở trạng thái packed chưa
                 $check_packing_list = DB::select('select count(*) as count_pkl from order_journey left join packing_list on packing_list.id = id_packing_list where order_id = ' . $order_id . ' and id_packing_list is not null and packing_list.status = 10 and DATEDIFF(order_journey.created_date, SYSDATE()) > 2');
                 if (isset($check_packing_list[0]->count_pkl) && $check_packing_list[0]->count_pkl * 1 > 0) {
                     $result = [
@@ -479,32 +454,17 @@ $data['extension'] = $extension;
                         'message' => 'This label cannot be deleted!'
                     ];
 
-                    Log::error('========== LOG deleteLabel: This label cannot be deleted!');
-                    return response()->json($result);
+                    Log::error('========== LOG doDeleteLabel: This label cannot be deleted!');
+                    return $result;
                 };
 
                 $provider = DB::table('order_transactions')->where('order_id', $order_id)->value('shipping_provider');
                 $tracking_provider = DB::table('order_transactions')->where('order_id', $order_id)->value('tracking_provider');
                 $providerLower = $provider ? strtolower($provider) : '';
 
-                /*DB::table('order_transactions')->where('order_id', $order_id)->delete();
-
-                DB::table('order_rates')->where('order_id', $order_id)->delete();
-
-                DB::table('orders')->where('id', $order_id)
-                    ->update([
-                        'order_address_from_id' => null,
-                        'tracking' => null
-                    ]);
-
-                DB::commit();*/
-
-
-                // Nếu label mua qua G7 thì gọi API delete order
                 if ($providerLower === 'g7') {
-                    Log::error('========== LOG deleteLabel (3): tracking provider: ' . $tracking_provider);
+                    Log::error('========== LOG doDeleteLabel (3): tracking provider: ' . $tracking_provider);
 
-                    // Gọi API Login G7
                     $curl = curl_init();
                     curl_setopt_array($curl, array(
                         CURLOPT_URL => 'https://g7logistics.com/agentapi/login',
@@ -524,16 +484,15 @@ $data['extension'] = $extension;
                         ),
                     ));
                     $response = curl_exec($curl);
-                    Log::error('========== LOG deleteLabel (4): ' . json_encode($response));
+                    Log::error('========== LOG doDeleteLabel (4): ' . json_encode($response));
                     curl_close($curl);
 
                     $isLogin = (json_decode($response))->succeeded ?? false;
 
-                    if ($isLogin === true) { // Nếu login thành công
-                        Log::error('========== LOG deleteLabel (5)');
+                    if ($isLogin === true) {
+                        Log::error('========== LOG doDeleteLabel (5)');
                         $token = (json_decode($response))->data->token;
 
-                        // Gọi API Delete Order
                         $curl = curl_init();
 
                         curl_setopt_array($curl, array(
@@ -555,7 +514,7 @@ $data['extension'] = $extension;
                         $response = curl_exec($curl);
 
                         curl_close($curl);
-                        Log::error('========== LOG deleteLabel (6): ' . json_encode($response));
+                        Log::error('========== LOG doDeleteLabel (6): ' . json_encode($response));
 
                         if ((json_decode($response))->succeeded === true) {
                             $deleteSuccess = true;
@@ -567,13 +526,13 @@ $data['extension'] = $extension;
                         }
 
                     } else {
-                        Log::error('========== LOG deleteLabel (7): Login G7 API failed!');
+                        Log::error('========== LOG doDeleteLabel (7): Login G7 API failed!');
                         $result = [
                             'status' => 'error',
                             'message' => 'Login G7 API failed!'
                         ];
 
-                        return response()->json($result);
+                        return $result;
                     }
                 } elseif ($providerLower === 'shippo') {
                     try {
@@ -643,23 +602,64 @@ $data['extension'] = $extension;
                     ];
                 }
 
-                Log::error('========== LOG deleteLabel (8): ' . json_encode($result));
-                return response()->json($result);
+                Log::error('========== LOG doDeleteLabel (8): ' . json_encode($result));
+                return $result;
             } else {
                 $result = [
                     'status' => 'error',
                     'message' => 'You do not have permission to perform this function!'
                 ];
 
-                Log::error('========== LOG deleteLabel (9): You do not have permission to perform this function');
-                return response()->json($result);
+                Log::error('========== LOG doDeleteLabel (9): You do not have permission to perform this function');
+                return $result;
             }
         } catch (Exception $e) {
             DB::rollBack();
-            Log::error('========== LOG deleteLabel Exception: ' . $e->getMessage());
+            Log::error('========== LOG doDeleteLabel Exception: ' . $e->getMessage());
+            return [
+                'status' => 'error',
+                'message' => $e->getMessage()
+            ];
+        }
+    }
+
+    public function detail($id)
+    {
+        try {
+            $item = $this->orderService->detail($id);
+
+            //return view('staff.order.detail', $item);
+            return view('order.detail', $item);
+        } catch (Exception $e) {
+            Log::error($e);
             //TODO redirect to error page
             abort(500);
         }
+    }
+
+    public function new($id)
+    {
+        try {
+            $data = $this->orderService->new($id);
+            $countries = DB::table('sys_country')->get()->toArray();
+            //$states = DB::table('sys_states')->get()->toArray();
+            //$cities = DB::table('sys_cities')->get()->toArray();
+            $data['countries'] = $countries ?? [];
+            $data['states'] = $states ?? [];
+            $data['cities'] = $cities ?? [];
+
+            return view('order.new', $data);
+        } catch (Exception $e) {
+            Log::error($e);
+            //TODO redirect to error page
+            abort(500);
+        }
+    }
+
+    public function deleteLabel($order_id)
+    {
+        $result = $this->doDeleteLabel($order_id);
+        return response()->json($result);
     }
 
     public function deleteOrder($order_id)
@@ -772,6 +772,37 @@ $data['extension'] = $extension;
             abort(500);
         }
         exit();
+    }
+
+    public function bulkDeleteLabels(Request $request)
+    {
+        $ids = $request->input('order_ids', []);
+        if (is_string($ids)) {
+            $decoded = json_decode($ids, true);
+            if (json_last_error() === JSON_ERROR_NONE) {
+                $ids = $decoded;
+            }
+        }
+        if (!is_array($ids) || count($ids) === 0) {
+            return response()->json(['status' => 'error', 'message' => 'No orders selected.'], 400);
+        }
+
+        $success = [];
+        $failed = [];
+        foreach ($ids as $id) {
+            $res = $this->doDeleteLabel((int)$id);
+            if (($res['status'] ?? 'error') === 'success') {
+                $success[] = $id;
+            } else {
+                $failed[] = ['id' => $id, 'message' => $res['message'] ?? 'unknown'];
+            }
+        }
+
+        return response()->json([
+            'status' => 'success',
+            'deleted' => $success,
+            'failed' => $failed,
+        ]);
     }
 
     /**

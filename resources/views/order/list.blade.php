@@ -257,6 +257,7 @@
                                 <input type="hidden" name="order_ids" id="bulk-order-ids" value="">
                                 <button type="submit" class="btn btn-primary btn-round" id="btn-download-previews">Download Previews</button>
                             </form>
+                            <button type="button" class="btn btn-danger btn-round ml-2" id="btn-bulk-delete-labels">Delete selected labels</button>
                         </div>
                         @if (count($orders))
                             <div class="table-responsive">
@@ -669,6 +670,46 @@
                     return false;
                 }
                 $('#bulk-order-ids').val(JSON.stringify(ids));
+            });
+
+            // Bulk delete labels
+            $(document).on('click', '#btn-bulk-delete-labels', function() {
+                const ids = $('.order-checkbox:checked').map(function(){ return $(this).val(); }).get();
+                if (ids.length === 0) {
+                    alert('Please select at least one order.');
+                    return;
+                }
+                if (!confirm('Do you want to delete labels for selected orders?')) {
+                    return;
+                }
+                $.ajax({
+                    url: '{{ route('staff.orders.bulkDeleteLabels') }}',
+                    type: 'POST',
+                    dataType: 'json',
+                    headers: { 'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content') },
+                    data: { order_ids: JSON.stringify(ids) },
+                    success: function(res) {
+                        if (res.status === 'success') {
+                            const failed = res.failed || [];
+                            if (failed.length > 0) {
+                                alert('Deleted: ' + (res.deleted || []).length + ', Failed: ' + failed.length);
+                            } else {
+                                alert('Deleted successfully!');
+                            }
+                            // reload datatable if server-side
+                            if ($.fn.DataTable.isDataTable('#datatable')) {
+                                $('#datatable').DataTable().ajax.reload();
+                            } else {
+                                location.reload();
+                            }
+                        } else {
+                            alert(res.message || 'Delete failed');
+                        }
+                    },
+                    error: function(err) {
+                        alert('Unexpected error while deleting labels.');
+                    }
+                });
             });
 
             // Delete order, label

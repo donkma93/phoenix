@@ -491,6 +491,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
             ->where(['id' => '[0-9]*'])
             ->middleware('role:staff,admin');
 
+        Route::post('/orders/bulk-delete-labels', [StaffOrderController::class, 'bulkDeleteLabels'])->name('orders.bulkDeleteLabels')
+            ->middleware('role:staff,admin');
+
         Route::get('/product', [StaffProductController::class, 'list'])->name('product.list')
             ->middleware('role:picker,packer,receiver,staff,staff-epacket');
         Route::get('/product/{id}', [StaffProductController::class, 'detail'])->name('product.detail')
