@@ -281,162 +281,6 @@
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        @foreach ($orders as $order)
-                                            <tr>
-                                                <td class="text-center"><input type="checkbox" class="order-checkbox" value="{{ $order->id }}"></td>
-                                                <td>{{ $order->id }}</td>
-                                                <td>
-                                                    <p title="BILL" style="margin: 0"> {{ $order->order_code ?? '' }}</p>
-                                                </td>
-                                                <td>
-                                                    <div>
-                                                        {{ $order->order_number ?? '' }}
-                                                    </div>
-                                                    <div>
-                                                        {{ $order->user_email ?? '' }}
-                                                    </div>
-                                                    <div style="display: none;">
-                                                        {{ $order->partner_code ?? '' }}
-                                                    </div>
-                                                </td>
-                                                {{--<td>
-                                                    {{ $order->name ?? '' }}
-                                                </td>--}}
-                                                <td>
-                                                    <b>Name:</b> {{ $order->name ?? '' }}
-                                                    <br>
-                                                    <b>Address:</b> {{ $order->addr ?? '' }}
-                                                    <br>
-                                                    <b>Zip:</b> {{ $order->zip ?? '' }}
-                                                </td>
-                                                <td style="text-align: left">
-                                                    <div>
-                                                        <b>Name:</b> {{ $order->item ?? '' }}
-                                                    </div>
-                                                    <div>
-                                                        <b>Quantity:</b> {{ $order->quantity ?? '' }}
-                                                    </div>
-                                                    <div>
-                                                        @php
-                                                            $sizeType = isset($order->size_type) ? ucfirst(App\Models\OrderPackage::$sizeName[$order->size_type]) : '';
-                                                            $weightType = isset($order->weight_type) ? ucfirst(App\Models\OrderPackage::$weightName[$order->weight_type]) : '';
-
-                                                            $length = $order->length ?? 'Unknown';
-                                                            $width = $order->width ?? 'Unknown';
-                                                            $height = $order->height ?? 'Unknown';
-                                                            $weight = $order->weight ?? 'Unknown';
-                                                        @endphp
-                                                        {{ $weight }} <b>{{ $weightType }}</b>
-                                                        {{ $length }} x {{ $width }} x {{ $height }}
-                                                        <b>{{ $sizeType }}</b>
-                                                    </div>
-                                                </td>
-                                                {{--<td>
-                                                    @php
-                                                        $sizeType = isset($order->size_type) ? ucfirst(App\Models\OrderPackage::$sizeName[$order->size_type]) : '';
-                                                        $weightType = isset($order->weight_type) ? ucfirst(App\Models\OrderPackage::$weightName[$order->weight_type]) : '';
-
-                                                        $length = $order->length ?? 'Unknown';
-                                                        $width = $order->width ?? 'Unknown';
-                                                        $height = $order->height ?? 'Unknown';
-                                                        $weight = $order->weight ?? 'Unknown';
-                                                    @endphp
-                                                    <div>{{ $weight }} <b>{{ $weightType }}</b>
-                                                        {{ $length }} x {{ $width }} x {{ $height }}
-                                                        <b>{{ $sizeType }}</b>
-                                                    </div>
-                                                </td>--}}
-                                                <td>
-                                                    {{ $order->amount ? number_format($order->amount) : '' }}
-                                                </td>
-                                                <td>
-                                                    <div>
-                                                        {{ $order->created_at }}
-                                                    </div>
-                                                </td>
-                                                <td>
-                                                    <div>{{ $order->tracking_number ?? '' }}</div>
-                                                    <div><b>{{ $order->provider ?? '' }}</b></div>
-                                                </td>
-                                                <td>
-                                                    @if (isset($order->label_url) && $order->picking_status != 5)
-                                                        <button type="button" class="fmus01 btn btn-sm btn-round btn-success btn-block"
-                                                            data-toggle="modal" data-target="#preview-label"
-                                                            onclick="previewPDF(`{{ asset($order->label_url) }}`)">
-                                                            Preview
-                                                        </button>
-                                                    @endif
-
-                                                        <a class="btn btn-warning btn-round btn-sm btn-block"
-                                                           href="{{ route('staff.orders.detail', ['id' => $order->id]) }}"
-                                                           >
-                                                            Detail
-                                                        </a>
-
-                                                        @if (!empty($order->order_address_to_id) && $order->transactions_id == null && $order->picking_status != 5)
-                                                            @if (!!$order->odr_rate_id || is_numeric($order->odr_rate_id))
-                                                                <a class="btn btn-primary btn-round btn-block btn-sm"
-                                                                   href="{{ route('staff.orders.rates.create', ['orderId' => $order->id]) }}">
-                                                                    {{ __('Choose Rate') }}
-                                                                </a>
-                                                            @else
-                                                                <a class="btn btn-primary btn-round btn-block btn-sm"
-                                                                   href="{{ route('staff.orders.labels.create', ['orderId' => $order->id]) }}">
-                                                                    {{ __('Transaction') }}
-                                                                </a>
-                                                            @endif
-                                                        @endif
-                                                </td>
-                                                {{--<td>
-                                                    <a class="btn btn-warning btn-round btn-icon"
-                                                        href="{{ route('staff.orders.detail', ['id' => $order->id]) }}"
-                                                        rel="tooltip" title="Detail">
-                                                        <i class="fa fa-info"></i>
-                                                    </a>
-                                                </td>--}}
-                                                <td>
-                                                    <div>
-                                                        @if(!$order->transactions_id && !$order->odr_rate_id)
-                                                            {{--Order sẽ chỉ delete được nếu chưa tồn tại transaction hoặc order rate--}}
-                                                            <button data-order-id="{{ $order->id }}" class="delete-order btn btn-block btn-round btn-warning btn-sm"
-                                                                    onclick="deleteOrder({{ $order->id }})"
-                                                            >Delete Order</button>
-                                                        @endif
-                                                        @if(!$order->picking_status)
-                                                            {{--Chỉ hold được nếu tt là unknow--}}
-                                                            <button data-order-id="{{ $order->id }}" class="hold-order btn btn-block btn-round btn-secondary btn-sm"
-                                                                onclick="holdOrder({{ $order->id }})"
-                                                            >Hold Order</button>
-                                                        @elseif($order->picking_status == 5)
-                                                            <button data-order-id="{{ $order->id }}" class="resume-order btn btn-block btn-round btn-success btn-sm"
-                                                                onclick="resumeOrder({{ $order->id }})"
-                                                            >Resume Ord</button>
-                                                        @endif
-                                                        @if((!!$order->transactions_id || is_numeric($order->transactions_id)) && $order->count_pkl * 1 === 0)
-                                                            {{--Chỉ delete được label nếu như order đó chưa có trong packing list nào, hoặc đã trong 1 packing list chưa finish--}}
-                                                            <button data-order-id="{{ $order->id }}" class="delete-label btn btn-block btn-round btn-info btn-sm"
-                                                                onclick="deleteLabel({{ $order->id }})"
-                                                            >Delete Label</button>
-                                                        @endif
-                                                    </div>
-                                                </td>
-                                                {{--<td>
-                                                    @if (!empty($order->order_address_to_id) && $order->transactions_id == null && $order->picking_status != 5)
-                                                        @if (!!$order->odr_rate_id || is_numeric($order->odr_rate_id))
-                                                            <a class="btn btn-primary btn-round btn-block btn-sm"
-                                                                href="{{ route('staff.orders.rates.create', ['orderId' => $order->id]) }}">
-                                                                {{ __('Choose Rate') }}
-                                                            </a>
-                                                        @else
-                                                            <a class="btn btn-primary btn-round btn-block btn-sm"
-                                                                href="{{ route('staff.orders.labels.create', ['orderId' => $order->id]) }}">
-                                                                {{ __('Transaction') }}
-                                                            </a>
-                                                        @endif
-                                                    @endif
-                                                </td>--}}
-                                            </tr>
-                                        @endforeach
                                     </tbody>
                                 </table>
                             </div>
@@ -743,16 +587,14 @@
 
                 $('.item_bill_status.bill_selected>input[name=bill_status]').prop('checked', true);
 
-                $('form#order_list_search_form').submit();
+                $('#datatable').DataTable().ajax.reload();
             })
 
 
-            // Datatable
+            // Datatable server-side
             $('#datatable').DataTable({
                 "pagingType": "full_numbers",
                 "lengthMenu": [
-                    // [10, 25, 50, -1],
-                    // [10, 25, 50, "All"]
                     [50, 25, 10],
                     [50, 25, 10]
                 ],
@@ -762,13 +604,41 @@
                     searchPlaceholder: "Search records",
                 },
                 "aaSorting": [],
-                columnDefs: [
-                    { targets: 0, orderable: false, searchable: false },
-                    { targets: 1, searchable: false }, // ID
-                    { targets: 2, searchable: true },  // Order Code
-                    { targets: [3,4,5,6,7,8,9,10], searchable: false } // Other columns
+                processing: true,
+                serverSide: true,
+                searching: true,
+                ajax: {
+                    url: "{{ route('staff.orders.datatable') }}",
+                    data: function (d) {
+                        d.date_from = $('#date_from').val();
+                        d.date_to = $('#date_to').val();
+                        const billStatusEl = document.querySelector('.item_bill_status.bill_selected>input[name=bill_status]');
+                        d.bill_status = billStatusEl ? billStatusEl.value : '{{ config('app.tracking_status_all') }}';
+                    }
+                },
+                columns: [
+                    { data: 'checkbox', orderable: false, searchable: false, className: 'text-center' },
+                    { data: 'id', searchable: false },
+                    { data: 'order_code', searchable: true },
+                    { data: 'customer', searchable: false },
+                    { data: 'receiver', searchable: false },
+                    { data: 'item', searchable: false },
+                    { data: 'amount', searchable: false },
+                    { data: 'created_at', searchable: false },
+                    { data: 'tracking', searchable: false },
+                    { data: 'actions', orderable: false, searchable: false, className: 'text-center' },
+                    { data: 'extra', orderable: false, searchable: false },
                 ],
-                // "ordering": false,
+                createdRow: function(row, data) {
+                    $('td', row).eq(0).html(data.checkbox);
+                    $('td', row).eq(2).html('<p title="BILL" style="margin: 0">' + data.order_code + '</p>');
+                    $('td', row).eq(3).html(data.customer);
+                    $('td', row).eq(4).html(data.receiver);
+                    $('td', row).eq(5).html(data.item);
+                    $('td', row).eq(8).html(data.tracking);
+                    $('td', row).eq(9).html(data.actions);
+                    $('td', row).eq(10).html(data.extra);
+                }
             });
 
 

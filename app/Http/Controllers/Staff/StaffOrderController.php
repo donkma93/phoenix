@@ -83,6 +83,137 @@ class StaffOrderController extends StaffBaseController
         }
     }
 
+    public function listDataTable(Request $request)
+    {
+        try {
+            $input_data = $request->all();
+            $date_from = $input_data['date_from'] ?? date('Y-m-d', strtotime('-1 month'));
+            $date_to = $input_data['date_to'] ?? date('Y-m-d');
+            $order_status = $input_data['bill_status'] ?? 99; // 99 là lấy tất cả
+
+            $draw = intval($request->input('draw')); // DataTables draw counter
+            $start = intval($request->input('start', 0));
+            $length = intval($request->input('length', 50));
+            if ($length <= 0) { $length = 50; }
+            $searchValue = trim($request->input('search.value', ''));
+
+            [$count_order_status, $list_orders] = \App\Helpers\Functions::CallRaw('order_list_staff', [
+                $date_from,
+                $date_to,
+                $order_status
+            ]);
+
+            $all = collect($list_orders ?? []);
+
+            $recordsTotal = $all->count();
+
+            if ($searchValue !== '') {
+                $all = $all->filter(function ($row) use ($searchValue) {
+                    $orderCode = isset($row->order_code) ? (string)$row->order_code : '';
+                    return stripos($orderCode, $searchValue) !== false;
+                });
+            }
+
+            $recordsFiltered = $all->count();
+
+            $paged = $all->slice($start, $length);
+
+            $data = $paged->map(function ($order) {
+                $checkbox = '<input type="checkbox" class="order-checkbox" value="' . ($order->id ?? '') . '">';
+                $customerHtml = '<div>' . e($order->order_number ?? '') . '</div>'
+                    . '<div>' . e($order->user_email ?? '') . '</div>'
+                    . '<div style="display: none;">' . e($order->partner_code ?? '') . '</div>';
+                $receiverHtml = '<b>Name:</b> ' . e($order->name ?? '') . '<br>'
+                    . '<b>Address:</b> ' . e($order->addr ?? '') . '<br>'
+                    . '<b>Zip:</b> ' . e($order->zip ?? '');
+
+                $sizeType = isset($order->size_type) ? ucfirst(\App\Models\OrderPackage::$sizeName[$order->size_type] ?? '') : '';
+                $weightType = isset($order->weight_type) ? ucfirst(\App\Models\OrderPackage::$weightName[$order->weight_type] ?? '') : '';
+                $lengthVal = $order->length ?? 'Unknown';
+                $widthVal = $order->width ?? 'Unknown';
+                $heightVal = $order->height ?? 'Unknown';
+                $weightVal = $order->weight ?? 'Unknown';
+                $itemHtml = '<div><b>Name:</b> ' . e($order->item ?? '') . '</div>'
+                    . '<div><b>Quantity:</b> ' . e($order->quantity ?? '') . '</div>'
+                    . '<div>' . e($weightVal) . ' <b>' . e($weightType) . '</b> '
+                    . e($lengthVal) . ' x ' . e($widthVal) . ' x ' . e($heightVal) . ' <b>' . e($sizeType) . '</b></div>';
+
+                $amountStr = isset($order->amount) ? number_format($order->amount) : '';
+
+                $trackingHtml = '<div>' . e($order->tracking_number ?? '') . '</div>'
+                    . '<div><b>' . e($order->provider ?? '') . '</b></div>';
+
+                $previewBtn = '';
+                if (isset($order->label_url) && ($order->picking_status ?? null) != 5) {
+                    $labelUrl = asset($order->label_url);
+                    $previewBtn = '<button type="button" class="fmus01 btn btn-sm btn-round btn-success btn-block" data-toggle="modal" data-target="#preview-label" onclick="previewPDF(`' . $labelUrl . '`)">Preview</button>';
+                }
+                $detailBtn = '<a class="btn btn-warning btn-round btn-sm btn-block" href="' . route('staff.orders.detail', ['id' => $order->id]) . '">Detail</a>';
+
+                $chooseBtn = '';
+                $canChoose = !empty($order->order_address_to_id) && ($order->transactions_id ?? null) == null && ($order->picking_status ?? null) != 5;
+                if ($canChoose) {
+                    if (!empty($order->odr_rate_id) || is_numeric($order->odr_rate_id ?? null)) {
+                        $chooseBtn = '<a class="btn btn-primary btn-round btn-block btn-sm" href="' . route('staff.orders.rates.create', ['orderId' => $order->id]) . '">Choose Rate</a>';
+                    } else {
+                        $chooseBtn = '<a class="btn btn-primary btn-round btn-block btn-sm" href="' . route('staff.orders.labels.create', ['orderId' => $order->id]) . '">Transaction</a>';
+                    }
+                }
+
+                $deleteOrderBtn = '';
+                if (!(($order->transactions_id ?? null) || ($order->odr_rate_id ?? null))) {
+                    $deleteOrderBtn = '<button data-order-id="' . $order->id . '" class="delete-order btn btn-block btn-round btn-warning btn-sm" onclick="deleteOrder(' . $order->id . ')">Delete Order</button>';
+                }
+
+                $holdResumeBtn = '';
+                if (!($order->picking_status ?? null)) {
+                    $holdResumeBtn = '<button data-order-id="' . $order->id . '" class="hold-order btn btn-block btn-round btn-secondary btn-sm" onclick="holdOrder(' . $order->id . ')">Hold Order</button>';
+                } elseif (($order->picking_status ?? null) == 5) {
+                    $holdResumeBtn = '<button data-order-id="' . $order->id . '" class="resume-order btn btn-block btn-round btn-success btn-sm" onclick="resumeOrder(' . $order->id . ')">Resume Ord</button>';
+                }
+
+                $deleteLabelBtn = '';
+                $inPackingList = ($order->count_pkl ?? 0) * 1 !== 0;
+                if (((($order->transactions_id ?? null) || is_numeric($order->transactions_id ?? null)) && !$inPackingList)) {
+                    $deleteLabelBtn = '<button data-order-id="' . $order->id . '" class="delete-label btn btn-block btn-round btn-info btn-sm" onclick="deleteLabel(' . $order->id . ')">Delete Label</button>';
+                }
+
+                $actionsHtml = $previewBtn . $detailBtn . $chooseBtn;
+                $extraHtml = '<div>' . $deleteOrderBtn . $holdResumeBtn . $deleteLabelBtn . '</div>';
+
+                return [
+                    'checkbox' => $checkbox,
+                    'id' => $order->id,
+                    'order_code' => e($order->order_code ?? ''),
+                    'customer' => $customerHtml,
+                    'receiver' => $receiverHtml,
+                    'item' => $itemHtml,
+                    'amount' => $amountStr,
+                    'created_at' => e($order->created_at ?? ''),
+                    'tracking' => $trackingHtml,
+                    'actions' => $actionsHtml,
+                    'extra' => $extraHtml,
+                ];
+            })->values();
+
+            return response()->json([
+                'draw' => $draw,
+                'recordsTotal' => $recordsTotal,
+                'recordsFiltered' => $recordsFiltered,
+                'data' => $data,
+            ]);
+        } catch (Exception $e) {
+            Log::error($e);
+            return response()->json([
+                'draw' => intval($request->input('draw', 0)),
+                'recordsTotal' => 0,
+                'recordsFiltered' => 0,
+                'data' => [],
+                'error' => 'Unexpected error',
+            ]);
+        }
+    }
+
     public function importPricesExcel(Request $request)
     {
         try {
