@@ -763,7 +763,10 @@
                 },
                 "aaSorting": [],
                 columnDefs: [
-                    { targets: 0, orderable: false }
+                    { targets: 0, orderable: false, searchable: false },
+                    { targets: 1, searchable: false }, // ID
+                    { targets: 2, searchable: true },  // Order Code
+                    { targets: [3,4,5,6,7,8,9,10], searchable: false } // Other columns
                 ],
                 // "ordering": false,
             });
