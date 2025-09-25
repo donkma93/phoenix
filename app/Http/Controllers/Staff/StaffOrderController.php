@@ -107,21 +107,35 @@ class StaffOrderController extends StaffBaseController
 
             $recordsTotal = $all->count();
 
-            if ($searchValue !== '') {
-                $terms = array_values(array_filter(array_map('trim', explode(',', $searchValue)), function($v){ return $v !== ''; }));
-                if (count($terms) === 0) {
-                    $terms = [$searchValue];
-                }
-                $all = $all->filter(function ($row) use ($terms) {
-                    $orderCode = isset($row->order_code) ? (string)$row->order_code : '';
-                    foreach ($terms as $t) {
-                        if ($t !== '' && stripos($orderCode, $t) !== false) {
-                            return true;
-                        }
-                    }
-                    return false;
-                });
-            }
+				if ($searchValue !== '') {
+					$terms = array_values(array_filter(array_map('trim', explode(',', $searchValue)), function($v){ return $v !== ''; }));
+					if (count($terms) === 0) {
+						$terms = [$searchValue];
+					}
+					$all = $all->filter(function ($row) use ($terms) {
+						$fields = [
+							isset($row->order_code) ? (string)$row->order_code : '',
+							isset($row->order_number) ? (string)$row->order_number : '',
+							isset($row->user_email) ? (string)$row->user_email : '',
+							isset($row->partner_code) ? (string)$row->partner_code : '',
+							isset($row->name) ? (string)$row->name : '',
+							isset($row->addr) ? (string)$row->addr : '',
+							isset($row->zip) ? (string)$row->zip : '',
+							isset($row->tracking_number) ? (string)$row->tracking_number : '',
+							isset($row->provider) ? (string)$row->provider : '',
+							isset($row->item) ? (string)$row->item : '',
+						];
+						foreach ($terms as $t) {
+							if ($t === '') { continue; }
+							foreach ($fields as $val) {
+								if ($val !== '' && stripos($val, $t) !== false) {
+									return true;
+								}
+							}
+						}
+						return false;
+					});
+				}
 
             $recordsFiltered = $all->count();
 
