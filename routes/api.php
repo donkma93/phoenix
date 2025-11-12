@@ -139,7 +139,7 @@ Route::middleware(['jwt.verify'])->group(function () {
 
 Route::post('/webhook-shippo', [WebhookShippoController::class, 'handle_data'])->name('webhook.shippo');
 
-Route::post('/api/myib-webhook', function (Request $request) {
+Route::post('/myib-webhook', function (Request $request) {
     // Ghi log toàn bộ dữ liệu webhook gửi đến
     Log::info('📦 Webhook từ MyIB:', $request->all());
 

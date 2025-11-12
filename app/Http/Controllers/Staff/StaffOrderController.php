@@ -889,6 +889,32 @@ $data['extension'] = $extension;
         }
     }
 
+    public function importLabelMyib(Request $request)
+    {
+        try {
+            $data = $this->orderService->storeExcelMyib(request()->file('label_file'), $request->all());
+
+            if (!$data['isValid']) {
+                return back()
+                    ->with('error', $data['message'] ?? '')
+                    ->with('csvErrorsMyib', $data['errors'] ?? [])
+                    ->with('errorsForeachMyib', $data['errorsArr'] ?? []);
+            }
+
+            if (count($data['ordersError']) > 0) {
+                Log::warning('IMPORT LABELS FAILED: ' . implode(', ', $data['ordersError']));
+
+                return redirect()->route('staff.orders.list')->with('warning', 'Create failed: ' . implode(', ', $data['ordersError']));
+            }
+
+            return redirect()->route('staff.orders.list')->with('success', "Create labels successful");
+        } catch (Exception $e) {
+            Log::error($e);
+
+            return redirect()->route('staff.orders.list')->with('error', "Create labels failed");
+        }
+    }
+
     /**
      * Create a new order.
      *
@@ -1344,6 +1370,31 @@ $data['extension'] = $extension;
         }
 
         // exit();
+    }
+
+    public function createLabelMyib(StoreLabelRequest $request)
+    {
+        Log::error('============ LOG START createLabelMyib Order code: ' . $request->get('order_code') . ' ============================================================');
+        try {
+            Log::error('===== LOG createLabelMyib (1)');
+
+            $orderId = $request->get('order_id');
+            $data = $this->orderService->storeLabelMyib($request->all(), $orderId);
+
+            if (count($data['errorMsg'])) {
+                Log::error('===== LOG createLabelMyib Error: ' . json_encode($data['errorMsg']));
+                return redirect()->back()
+                    ->with('fail', "Information is invalid.")
+                    ->with('errorData', $data);
+            }
+
+            return redirect()->route('staff.orders.rates.create', ['orderId' => $orderId])
+                ->with('success', "Create successed. Please choose rate.");
+
+        } catch (Exception $e) {
+            Log::error('===== LOG createLabelMyib Exception: ' . $e->getMessage());
+            return redirect()->route('staff.orders.list')->with('fail', "Create new label failed");
+        }
     }
 
     public function createLabelExcelView()

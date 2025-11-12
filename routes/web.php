@@ -576,6 +576,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::post('/orders/labels/create-via-g7', [StaffOrderController::class, 'createLabelG7'])->name('orders.labels.create.g7')
             ->middleware('role:picker,packer,receiver,staff,staff-epacket');
 
+        Route::post('/orders/labels/create-via-myib', [StaffOrderController::class, 'createLabelMyib'])->name('orders.labels.create.myib')
+            ->middleware('role:picker,packer,receiver,staff,staff-epacket');
+
         Route::get('/labels/import-excel', [StaffOrderController::class, 'createLabelExcelView'])->name('labels.import.excel')
             ->middleware('role:picker,packer,receiver,staff,staff-epacket');
 
@@ -583,6 +586,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
             ->middleware('role:picker,packer,receiver,staff,staff-epacket');
 
         Route::post('/labels/import-excel-shippo', [StaffOrderController::class, 'importLabelShippo'])->name('labels.import.excel.shippo')
+            ->middleware('role:picker,packer,receiver,staff,staff-epacket');
+
+        Route::post('/labels/import-excel-myib', [StaffOrderController::class, 'importLabelMyib'])->name('labels.import.excel.myib')
             ->middleware('role:picker,packer,receiver,staff,staff-epacket');
 
         Route::post('/orders/labels/create-label-other', [StaffOrderController::class, 'createLabelOther'])->name('orders.labels.create.other')

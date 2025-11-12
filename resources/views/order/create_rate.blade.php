@@ -103,7 +103,11 @@
                                     <tr style="text-align: center">
                                         <td>{{ $index + 1 }}</td>
                                         <td>
-                                            <img src="{{ $rate->provider_image_75 }}" alt="">
+                                            @if ($rate->provider_image_75)
+                                                <img src="{{ $rate->provider_image_75 }}" alt="">
+                                            @else
+                                                <span>{{ $rate->provider }}</span>
+                                            @endif
                                         </td>
                                         <td>
                                             <b>{{ $rate->provider }} {{ $rate->service_name ?? '' }}</b>
@@ -112,9 +116,20 @@
                                         <td> {{ $rate->estimated_days == "1" ? $rate->estimated_days . " day" : $rate->estimated_days . " days" }} </td>
                                         <td>
                                             @if ($rate->attributes)
-                                                @foreach ($rate->attributes as $attribute)
-                                                    <div> {{ $attribute }} </div>
-                                                @endforeach
+                                                @php
+                                                    $attributes = is_string($rate->attributes) ? json_decode($rate->attributes, true) : $rate->attributes;
+                                                @endphp
+                                                @if (is_array($attributes))
+                                                    @foreach ($attributes as $key => $value)
+                                                        @if (is_string($value))
+                                                            <div>{{ $value }}</div>
+                                                        @else
+                                                            <div>{{ $key }}: {{ $value }}</div>
+                                                        @endif
+                                                    @endforeach
+                                                @else
+                                                    <div>{{ $rate->attributes }}</div>
+                                                @endif
                                             @endif
                                         </td>
                                         <td style="text-align: left">

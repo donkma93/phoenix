@@ -747,9 +747,13 @@
                                     <input class="btn btn-info btn-round create_label_normal" type="button"
                                         value="{{ __('Create Label') }}">
                                 </div>
-                                <div class="text-center text-sm-left ml-2">
+                                <!-- <div class="text-center text-sm-left ml-2">
                                     <input class="btn btn-success btn-round create_label_g7" type="button"
                                         value="{{ __('Buy labels via g7') }}">
+                                </div> -->
+                                <div class="text-center text-sm-left ml-2">
+                                    <input class="btn btn-primary btn-round create_label_myib" type="button"
+                                        value="{{ __('Buy labels via Myib') }}">
                                 </div>
                                 <div class="text-center text-sm-left ml-2">
                                     <input class="btn btn-warning btn-round create_label_other exc_validate"
@@ -859,6 +863,91 @@
                     let url = "{{ route('staff.orders.labels.create.g7') }}";
                     $('#create_label_form').prop('action', url);
                     $('#create_label_form').submit();
+                }
+            })
+
+            $('.create_label_myib').on('click', function() {
+                let isValidate = true;
+
+                // Validate required fields similar to create_label_other
+                input_add_info.forEach(function(input) {
+                    if (input.value.trim() === '') {
+                        isValidate = false;
+                        input.parentElement.classList.add('invalid');
+                        input.parentElement.querySelector('.form_message').innerText =
+                            'Vui lòng nhập trường này!';
+                    }
+                })
+
+                // Validate form fields
+                let requiredFields = [
+                    '#shipping_name',
+                    '#shipping_country',
+                    '#shipping_street',
+                    '#shipping_province',
+                    '#shipping_city',
+                    '#shipping_zip',
+                    '#package_height',
+                    '#package_length',
+                    '#package_width',
+                    '#package_weight'
+                ];
+
+                requiredFields.forEach(function(fieldSelector) {
+                    let field = $(fieldSelector);
+                    if (!field.length || field.val().trim() === '' || field.val() == 0) {
+                        isValidate = false;
+                        field.closest('.form-group').addClass('invalid');
+                        let errorMsg = field.closest('.form-group').find('.form_message');
+                        if (errorMsg.length) {
+                            errorMsg.text('Vui lòng nhập trường này!');
+                        }
+                    }
+                });
+
+                // Validate size_type and weight_type
+                let sizeType = $('#size_type');
+                if (!sizeType.length || !sizeType.val() || sizeType.val().trim() === '') {
+                    isValidate = false;
+                    sizeType.closest('.form-group').addClass('invalid');
+                    let errorMsg = sizeType.closest('.form-group').find('.form_message');
+                    if (errorMsg.length) {
+                        errorMsg.text('Vui lòng chọn loại kích thước!');
+                    }
+                }
+
+                let weightType = $('#weight_type');
+                if (!weightType.length || !weightType.val() || weightType.val().trim() === '') {
+                    isValidate = false;
+                    weightType.closest('.form-group').addClass('invalid');
+                    let errorMsg = weightType.closest('.form-group').find('.form_message');
+                    if (errorMsg.length) {
+                        errorMsg.text('Vui lòng chọn loại trọng lượng!');
+                    }
+                }
+
+                if (isValidate) {
+                    let is_confirm = confirm('Are you sure you want to create a label?');
+
+                    if (is_confirm) {
+                        let $this = $(this);
+                        $this.prop('disabled', true);
+                        setTimeout(function () {
+                            $this.prop('disabled', false);
+                        }, 10000)
+
+                        let url = "{{ route('staff.orders.labels.create.myib') }}";
+                        $('#create_label_form').prop('action', url);
+                        $('#create_label_form').submit();
+                    }
+                } else {
+                    // Scroll to first invalid field
+                    let firstInvalid = $('.form-group.invalid').first();
+                    if (firstInvalid.length) {
+                        $('html, body').animate({
+                            scrollTop: firstInvalid.offset().top - 100
+                        }, 500);
+                    }
                 }
             })
 
