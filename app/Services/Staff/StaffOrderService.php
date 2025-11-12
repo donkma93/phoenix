@@ -1346,7 +1346,8 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
             return [
                 'request' => $request,
                 'rates' => $orderRates,
-                'errorMsg' => []
+                'errorMsg' => [],
+                'provider' => 'shippo'
             ];
         } catch (Exception $e) {
             DB::rollback();
@@ -1565,19 +1566,37 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
         }
     }
 
-    public function getRates($orderId)
+    public function getRates($orderId, $provider = null)
     {
-        $orderRates = OrderRate::where('order_id', $orderId)->get();
-        return $orderRates;
+        $query = OrderRate::where('order_id', $orderId);
+        
+        // Filter by provider if specified
+        if ($provider === 'shippo') {
+            $query->where(function($q) {
+                $q->where('object_owner', '!=', 'myib')
+                  ->orWhereNull('object_owner');
+            });
+        } elseif ($provider === 'myib') {
+            $query->where('object_owner', 'myib');
+        }
+        
+        return $query->get();
     }
 
     public function storeRate($rateId, $orderId)
     {
         try {
-            // Mua labelxxx 4
+            Log::info('storeRate called', ['rate_id' => $rateId, 'order_id' => $orderId]);
+            
+            // Mua labelxxx 4 - Create label from selected rate
             DB::beginTransaction();
 
-            $order = Order::with(['orderProducts.product'])->findOrFail($orderId);
+            // Load order with necessary relationships
+            $order = Order::with(['user', 'orderProducts.product'])->findOrFail($orderId);
+            
+            Log::info('Order loaded', ['order_id' => $order->id, 'order_number' => $order->order_number]);
+            
+            // Get order package (already updated in storeLabel)
             $orderPackage = OrderPackage::where('order_id', $order->id)->first();
 
             $shippoOrder = null;
@@ -1585,34 +1604,73 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
             $addressFrom = OrderAddress::where('id', $order->order_address_from_id)->first();
             $addressTo = OrderAddress::where('id', $order->order_address_to_id)->first();
 
-            Log::info("STAFF_STORE_RATE:: country:" . $addressTo->country);
+            if (!$addressFrom) {
+                $addressFrom = (object) [
+                    'name' => $order->shipping_name ?? '',
+                    'street1' => $order->shipping_street ?? '',
+                    'street2' => $order->shipping_address1 ?? '',
+                    'street3' => $order->shipping_address2 ?? '',
+                    'company' => $order->shipping_company ?? '',
+                    'city' => $order->shipping_city ?? '',
+                    'state' => $order->shipping_province ?? '',
+                    'zip' => $order->shipping_zip ?? '',
+                    'country' => $order->shipping_country ?? '',
+                    'phone' => $order->shipping_phone ?? '',
+                    'email' => ($order->user ? $order->user->email : null),
+                ];
+            }
 
-            if ($addressTo->country != 'US' && $addressTo->country != 'United States') {
+            if (!$addressTo) {
+                $addressTo = (object) [
+                    'name' => $order->shipping_name ?? '',
+                    'street1' => $order->shipping_street ?? '',
+                    'street2' => $order->shipping_address1 ?? '',
+                    'street3' => $order->shipping_address2 ?? '',
+                    'company' => $order->shipping_company ?? '',
+                    'city' => $order->shipping_city ?? '',
+                    'state' => $order->shipping_province ?? '',
+                    'zip' => $order->shipping_zip ?? '',
+                    'country' => $order->shipping_country ?? '',
+                    'phone' => $order->shipping_phone ?? '',
+                    'email' => ($order->user ? $order->user->email : null),
+                ];
+            }
+
+            Log::info("STAFF_STORE_RATE:: country:" . ($addressTo->country ?? ''));
+
+            if (($addressTo->country ?? '') != 'US' && ($addressTo->country ?? '') != 'United States') {
 
                 $warehouse = Warehouse::where('type', 'B')->first();
 
                 $items = [];
 
-                foreach ($order->orderProducts as $productItem) {
-                    $items[] =
-                        array(
-                            "total_amount" => $productItem->quantity,
-                            "weight_unit" => OrderPackage::$weightName[$orderPackage->weight_type],
-                            "title" => $productItem->product->name
+                if ($order->orderProducts && count($order->orderProducts) > 0) {
+                    foreach ($order->orderProducts as $productItem) {
+                        $items[] = array(
+                            "total_amount" => $productItem->quantity ?? 1,
+                            "weight_unit" => ($orderPackage && isset(OrderPackage::$weightName[$orderPackage->weight_type])) 
+                                ? OrderPackage::$weightName[$orderPackage->weight_type] 
+                                : 'lb',
+                            "title" => ($productItem->product ?? null) ? $productItem->product->name : 'Item'
                         );
+                    }
                 }
+
+                $fromStreet1 = $addressFrom->address1 ?? $addressFrom->street1 ?? ($warehouse ? $warehouse['sender_street'] : '');
+                $toStreet1 = $addressTo->address1 ?? $addressTo->street1 ?? $order->shipping_address1;
+                $toStreet2 = $addressTo->address2 ?? $addressTo->street2 ?? $order->shipping_address2;
 
                 $payload = array(
                     "total_tax" => "0.00",
                     "from_address" => array(
                         "object_purpose" => "PURCHASE",
-                        'name' => $addressFrom->name ?? $warehouse['sender_name'],
-                        'company' => $addressFrom->company ?? $warehouse['sender_company'],
-                        'street1' => $addressFrom->address1 ?? $warehouse['sender_street'],
-                        'city' => $addressFrom->city ?? $warehouse['sender_city'],
-                        'state' => $addressFrom->state ?? $warehouse['sender_province'],
-                        'zip' => $addressFrom->zip ?? $warehouse['sender_zip'],
-                        'country' => $addressFrom->country ?? $warehouse['sender_country']
+                        'name' => $addressFrom->name ?? ($warehouse ? $warehouse['sender_name'] : ''),
+                        'company' => $addressFrom->company ?? ($warehouse ? $warehouse['sender_company'] : ''),
+                        'street1' => $fromStreet1,
+                        'city' => $addressFrom->city ?? ($warehouse ? $warehouse['sender_city'] : ''),
+                        'state' => $addressFrom->state ?? ($warehouse ? $warehouse['sender_province'] : ''),
+                        'zip' => $addressFrom->zip ?? ($warehouse ? $warehouse['sender_zip'] : ''),
+                        'country' => $addressFrom->country ?? ($warehouse ? $warehouse['sender_country'] : '')
                     ),
                     "to_address" => array(
                         "object_purpose" => "PURCHASE",
@@ -1621,15 +1679,13 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
                         "name" => $addressTo->name ?? $order->shipping_name,
                         "zip" => $addressTo->zip ?? $order->shipping_zip,
                         "country" => $addressTo->country ?? $order->shipping_country,
-                        "street2" => $addressTo->address2 ?? $order->shipping_address2,
-                        "street1" => $addressTo->address1 ?? $order->shipping_address1,
+                        "street2" => $toStreet2,
+                        "street1" => $toStreet1,
                         "company" => $addressTo->company ?? $order->shipping_company,
                         "phone" => $addressTo->phone ?? $order->shipping_phone
                     ),
                     "shipping_method" => null,
-                    // $orderPackage['weight_type'] = OrderPackage::$weightName[$orderPackage->weight_type];
-                    // $orderPackage['size_type'] = OrderPackage::$sizeName[$orderPackage->size_type];
-                    "weight" => $orderPackage->weight,
+                    "weight" => $orderPackage ? ($orderPackage->weight ?? 0) : 0,
                     "shop_app" => "Shippo",
                     "currency" => "USD",
                     "shipping_cost_currency" => "USD",
@@ -1640,7 +1696,9 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
                     "order_status" => "PAID",
                     "hidden" => false,
                     "order_number" => $order->order_number,
-                    "weight_unit" => OrderPackage::$weightName[$orderPackage->weight_type],
+                    "weight_unit" => ($orderPackage && isset(OrderPackage::$weightName[$orderPackage->weight_type])) 
+                        ? OrderPackage::$weightName[$orderPackage->weight_type] 
+                        : 'lb',
                     "placed_at" => $order->created_at
                 );
 
@@ -1651,12 +1709,48 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
             }
 
 
-            $orderRate = OrderRate::where('order_id', $orderId)->findOrFail($rateId);
+            // Find the rate - handle case where rate doesn't exist
+            $orderRate = OrderRate::where('order_id', $orderId)->where('id', $rateId)->first();
+            
+            if (!$orderRate) {
+                DB::rollBack();
+                Log::error('OrderRate not found', ['order_id' => $orderId, 'rate_id' => $rateId]);
+                return [
+                    'errorMsg' => ['Selected rate not found. Please refresh the page and try again.']
+                ];
+            }
             
             // Check if this is a Myib rate
             if ($orderRate->object_owner === 'myib') {
-                // Handle Myib rate
                 $transaction = $this->createMyibTransaction($orderRate, $order, $orderPackage);
+
+                if (count($transaction['errorMsg'])) {
+                    DB::rollBack();
+                    return [
+                        'errorMsg' => $transaction['errorMsg'],
+                    ];
+                }
+
+                if (!isset($transaction['value']) || !is_array($transaction['value'])) {
+                    DB::rollBack();
+                    Log::error('Myib transaction missing value', ['transaction' => $transaction]);
+                    return [
+                        'errorMsg' => ['Invalid response from Myib API'],
+                    ];
+                }
+
+                try {
+                    $this->persistMyibLabelData($order, $orderPackage, $orderRate, $transaction['value']);
+                } catch (Exception $e) {
+                    DB::rollBack();
+                    Log::error('persistMyibLabelData failed in storeRate', [
+                        'message' => $e->getMessage(),
+                        'order_id' => $orderId
+                    ]);
+                    return [
+                        'errorMsg' => ['Failed to save label data: ' . $e->getMessage()],
+                    ];
+                }
             } else {
                 // Handle Shippo rate
                 $transaction = OrderTransaction::createTransaction($orderRate->object_id, $shippoOrder);
@@ -1665,21 +1759,37 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
             Log::info('Admin create label, Tracking number: ' . ($transaction['value']['tracking_number'] ?? 'NULL'));
 
             if (count($transaction['errorMsg'])) {
+                DB::rollBack();
                 return [
                     'errorMsg' => $transaction['errorMsg'],
                 ];
             }
 
+            // Determine shipping provider based on rate
+            $shippingProvider = ($orderRate->object_owner === 'myib') ? 'MYIB' : 'SHIPPO';
+            
             OrderTransaction::updateOrCreate([
                 'order_id' => $orderId,
             ], [
-                // 'order_id' => $orderId,
                 'order_rate_id' => $rateId,
                 'transaction_id' => $transaction['value']['object_id'] ?? null,
                 'label_url' => $transaction['value']['label_url'] ?? null,
                 'tracking_number' => $transaction['value']['tracking_number'] ?? null,
                 'tracking_status' => $transaction['value']['tracking_status'] ?? null,
                 'tracking_url_provider' => $transaction['value']['tracking_url_provider'] ?? null,
+                'amount' => $transaction['value']['amount'] ?? ($orderRate->amount ?? null),
+                'currency' => $transaction['value']['currency'] ?? ($orderRate->currency ?? null),
+                'shipping_provider' => $shippingProvider,
+                'shipping_name' => $addressFrom->name ?? null,
+                'shipping_street' => $addressFrom->street1 ?? null,
+                'shipping_address1' => $addressFrom->street2 ?? null,
+                'shipping_address2' => $addressFrom->street3 ?? null,
+                'shipping_company' => $addressFrom->company ?? null,
+                'shipping_city' => $addressFrom->city ?? null,
+                'shipping_zip' => $addressFrom->zip ?? null,
+                'shipping_province' => $addressFrom->state ?? null,
+                'shipping_country' => $addressFrom->country ?? null,
+                'shipping_phone' => $addressFrom->phone ?? null,
             ]);
 
             DB::commit();
@@ -1693,18 +1803,22 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
             if ($webhook_url) {
                 $addFrom = DB::table('order_addresses')->where('id', $order->order_address_from_id)->first();
                 $addTo = DB::table('order_addresses')->where('id', $order->order_address_to_id)->first();
+                
+                // Determine carrier based on rate provider
+                $carrier = ($orderRate->object_owner === 'myib') ? 'myib' : 'shippo';
+                
                 $dataSendApi = (object) [
                     'event' => 'transaction_created',
-                    'status' => $transaction['value']['status'],
-                    'carrier' => 'shippo',
+                    'status' => $transaction['value']['status'] ?? $transaction['value']['tracking_status'] ?? 'Unknown',
+                    'carrier' => $carrier,
                     'customers_order' => $order->order_number,
                     'data' => [
                         'tracking_history' => [],
                         'tracking_status' => [
-                            'status' => 'Unknown'
+                            'status' => $transaction['value']['tracking_status'] ?? 'Unknown'
                         ],
-                        'carrier' => '',
-                        'tracking_number' => $transaction['value']['tracking_number'],
+                        'carrier' => $carrier,
+                        'tracking_number' => $transaction['value']['tracking_number'] ?? '',
                         'address_from' => [
                             'country' => $addFrom->country ?? '',
                             'zip' => $addFrom->zip ?? '',
@@ -1718,7 +1832,7 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
                             'city' => $addTo->city ?? '',
                         ]
                     ],
-                    'date_created' => $transaction['value']['object_created']
+                    'date_created' => $transaction['value']['object_created'] ?? $transaction['value']['postmark_date'] ?? now()->toIso8601String()
                 ];
 
 
@@ -1730,7 +1844,7 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
                         CURLOPT_RETURNTRANSFER => true,
                         CURLOPT_ENCODING => '',
                         CURLOPT_MAXREDIRS => 10,
-                        CURLOPT_TIMEOUT => 0,
+                        CURLOPT_TIMEOUT => 10,
                         CURLOPT_FOLLOWLOCATION => true,
                         CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
                         CURLOPT_CUSTOMREQUEST => 'POST',
@@ -1741,21 +1855,123 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
                     ));
 
                     $response = curl_exec($curl);
-
                     curl_close($curl);
-                    echo $response;
+                    
+                    // Log webhook response instead of echoing
+                    Log::info('Webhook sent', ['url' => $webhook_url, 'response' => $response]);
 
                 } catch (Exception $e) {
-                    Log::error($e->getMessage());
-                    throw $e;
+                    Log::error('Webhook error: ' . $e->getMessage());
+                    // Don't throw, just log the error
                 }
             }
 
             return [
                 'errorMsg' => []
             ];
+        } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+            DB::rollback();
+            Log::error('storeRate ModelNotFoundException', [
+                'message' => $e->getMessage(),
+                'order_id' => $orderId ?? null,
+                'rate_id' => $rateId ?? null
+            ]);
+            return [
+                'errorMsg' => ['Order or rate not found. Please refresh the page and try again.']
+            ];
         } catch (Exception $e) {
             DB::rollback();
+            Log::error('storeRate Exception', [
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString(),
+                'order_id' => $orderId ?? null,
+                'rate_id' => $rateId ?? null
+            ]);
+            return [
+                'errorMsg' => ['An error occurred: ' . $e->getMessage()]
+            ];
+        }
+    }
+
+    private function persistMyibLabelData(Order $order, ?OrderPackage $orderPackage, OrderRate $orderRate, array $transactionValue): void
+    {
+        try {
+            $addressFrom = $order->addressFrom;
+
+            if (!$addressFrom) {
+                $addressFrom = (object) [
+                    'name' => $order->shipping_name ?? '',
+                    'street1' => $order->shipping_street ?? '',
+                    'street2' => $order->shipping_address1 ?? '',
+                    'street3' => $order->shipping_address2 ?? '',
+                    'company' => $order->shipping_company ?? '',
+                    'city' => $order->shipping_city ?? '',
+                    'zip' => $order->shipping_zip ?? '',
+                    'state' => $order->shipping_province ?? '',
+                    'country' => $order->shipping_country ?? '',
+                    'phone' => $order->shipping_phone ?? '',
+                ];
+            }
+
+            $userId = Auth::id() ?? $order->user_id;
+            $amount = round((float) ($transactionValue['amount'] ?? $orderRate->amount ?? 0), 2);
+            $currency = $transactionValue['currency'] ?? $orderRate->currency ?? 'USD';
+            $labelUrl = $transactionValue['label_url'] ?? null;
+            $trackingNumber = $transactionValue['tracking_number'] ?? null;
+            $trackingStatus = $transactionValue['tracking_status'] ?? null;
+            $trackingProvider = $transactionValue['object_id'] ?? 'MYIB';
+
+            $width = $orderPackage ? ($orderPackage->width ?? 0) : 0;
+            $height = $orderPackage ? ($orderPackage->height ?? 0) : 0;
+            $length = $orderPackage ? ($orderPackage->length ?? 0) : 0;
+            $weight = $orderPackage ? ($orderPackage->weight ?? 0) : 0;
+            $sizeType = $orderPackage ? ($orderPackage->size_type ?? null) : null;
+            $weightType = $orderPackage ? ($orderPackage->weight_type ?? null) : null;
+
+            Log::info('Persisting Myib label data', [
+                'order_id' => $order->id,
+                'tracking_number' => $trackingNumber,
+                'label_url' => $labelUrl,
+                'amount' => $amount
+            ]);
+
+            DB::select('call label_create_input(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [
+                $userId,
+                $order->id,
+                $addressFrom->name ?? '',
+                $addressFrom->street1 ?? '',
+                $addressFrom->street2 ?? '',
+                $addressFrom->street3 ?? '',
+                $addressFrom->company ?? '',
+                $addressFrom->city ?? '',
+                $addressFrom->zip ?? '',
+                $addressFrom->state ?? '',
+                $addressFrom->country ?? '',
+                $addressFrom->phone ?? '',
+                $amount,
+                $currency,
+                $labelUrl ?? '',
+                $trackingProvider,
+                $trackingNumber ?? '',
+                'MYIB',
+                'MYIB',
+                $width,
+                $height,
+                $length,
+                $weight,
+                $sizeType,
+                $weightType,
+                $trackingStatus,
+            ]);
+        } catch (Exception $e) {
+            Log::error('persistMyibLabelData Exception', [
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'order_id' => $order->id ?? null
+            ]);
             throw $e;
         }
     }
@@ -1829,9 +2045,10 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
             $package = $order->orderPackage;
             $dimensions = $this->convertDimensionsToMyib($package);
             $weight = $this->convertWeightToMyib($package);
+            $requestId = $this->sanitizeMyibRequestId($order->order_number ?? (string)$order->id);
 
             // Prepare Myib API request payload
-            $myibPayload = $this->prepareMyibPayload($order, $dimensions, $weight);
+            $myibPayload = $this->prepareMyibPayload($order, $dimensions, $weight, $requestId);
 
             // Call Myib API 12 times with different shapes
             $myibRates = $this->getMyibRates($myibPayload);
@@ -1858,7 +2075,8 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
             return [
                 'request' => $request,
                 'rates' => $orderRates,
-                'errorMsg' => []
+                'errorMsg' => [],
+                'provider' => 'myib'
             ];
         } catch (Exception $e) {
             DB::rollback();
@@ -1869,106 +2087,175 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
 
     private function convertDimensionsToMyib($package)
     {
-        // Convert to cm
-        if ($package->size_type == OrderPackage::SIZE_IN) {
-            // inch to cm
+        $defaultLength = 6.0;
+        $defaultWidth = 6.0;
+        $defaultHeight = 6.0;
+
+        if (!$package) {
             return [
-                'length' => round($package->length * 2.54, 2),
-                'width' => round($package->width * 2.54, 2),
-                'height' => round($package->height * 2.54, 2),
-                'unit' => 'cm'
-            ];
-        } else {
-            // already in cm
-            return [
-                'length' => round($package->length, 2),
-                'width' => round($package->width, 2),
-                'height' => round($package->height, 2),
-                'unit' => 'cm'
+                'length' => $defaultLength,
+                'width' => $defaultWidth,
+                'height' => $defaultHeight,
+                'unit' => 'in',
             ];
         }
+
+        $length = (float) ($package->length ?? 0);
+        $width = (float) ($package->width ?? 0);
+        $height = (float) ($package->height ?? 0);
+
+        if ($package->size_type == OrderPackage::SIZE_CM) {
+            $length /= 2.54;
+            $width /= 2.54;
+            $height /= 2.54;
+        }
+
+        $length = $length > 0 ? $length : $defaultLength;
+        $width = $width > 0 ? $width : $defaultWidth;
+        $height = $height > 0 ? $height : $defaultHeight;
+
+        return [
+            'length' => round($length, 2),
+            'width' => round($width, 2),
+            'height' => round($height, 2),
+            'unit' => 'in',
+        ];
     }
 
     private function convertWeightToMyib($package)
     {
-        // Convert to oz
-        if ($package->weight_type == OrderPackage::WEIGHT_LB) {
-            // lb to oz
+        $defaultWeightLb = 0.1;
+
+        if (!$package) {
             return [
-                'weight' => round($package->weight * 16, 2),
-                'unit' => 'oz'
-            ];
-        } elseif ($package->weight_type == OrderPackage::WEIGHT_KG) {
-            // kg to oz
-            return [
-                'weight' => round($package->weight * 35.274, 2),
-                'unit' => 'oz'
-            ];
-        } else {
-            // already in oz
-            return [
-                'weight' => round($package->weight, 2),
-                'unit' => 'oz'
+                'weight' => $defaultWeightLb,
+                'unit' => 'lb'
             ];
         }
+
+        $weight = (float) ($package->weight ?? 0);
+
+        if ($package->weight_type == OrderPackage::WEIGHT_LB) {
+            $weight = $weight > 0 ? $weight : $defaultWeightLb;
+        } elseif ($package->weight_type == OrderPackage::WEIGHT_KG) {
+            $weight = $weight > 0 ? ($weight * 2.20462) : $defaultWeightLb;
+        } else {
+            // OZ to LB
+            $weight = $weight > 0 ? ($weight / 16) : $defaultWeightLb;
+        }
+
+        return [
+            'weight' => round(max($weight, $defaultWeightLb), 2),
+            'unit' => 'lb'
+        ];
     }
 
-    private function prepareMyibPayload($order, $dimensions, $weight)
+    private function sanitizeMyibRequestId(?string $base): string
+    {
+        $base = strtoupper(preg_replace('/[^A-Z0-9]/', '', $base ?? ''));
+
+        if (!$base) {
+            $base = 'MYIB' . strtoupper(Str::random(10));
+        }
+
+        return $base;
+    }
+
+    private function prepareMyibPayload($order, $dimensions, $weight, ?string $requestId = null)
     {
         $addressFrom = $order->addressFrom;
         $addressTo = $order->addressTo;
+
+        if (!$addressFrom) {
+            $addressFrom = (object) [
+                'company' => $order->shipping_company ?? '',
+                'name' => $order->shipping_name ?? '',
+                'street1' => $order->shipping_street ?? '',
+                'street2' => $order->shipping_address1 ?? '',
+                'street3' => $order->shipping_address2 ?? '',
+                'city' => $order->shipping_city ?? '',
+                'state' => $order->shipping_province ?? '',
+                'zip' => $order->shipping_zip ?? '',
+                'country' => $order->shipping_country ?? '',
+                'phone' => $order->shipping_phone ?? '',
+                'email' => ($order->user->email ?? null),
+            ];
+        }
+
+        if (!$addressTo) {
+            $addressTo = (object) [
+                'company' => $order->shipping_company ?? '',
+                'name' => $order->shipping_name ?? '',
+                'street1' => $order->shipping_street ?? '',
+                'street2' => $order->shipping_address1 ?? '',
+                'street3' => $order->shipping_address2 ?? '',
+                'city' => $order->shipping_city ?? '',
+                'state' => $order->shipping_province ?? '',
+                'zip' => $order->shipping_zip ?? '',
+                'country' => $order->shipping_country ?? '',
+                'phone' => $order->shipping_phone ?? '',
+                'email' => ($order->user->email ?? null),
+            ];
+        }
 
         // Split name into first, middle, last
         $fromNameParts = $this->splitName($addressFrom->name ?? '');
         $toNameParts = $this->splitName($addressTo->name ?? '');
 
-        return [
-            'from_address' => [
+        $payload = [
+            'request_id' => $requestId,
+            'from_address' => array_filter([
+                'company_name' => $addressFrom->company ?? '',
+                'first_name' => $fromNameParts['first'],
+                'middle_name' => $fromNameParts['middle'],
+                'last_name' => $fromNameParts['last'],
                 'line1' => $addressFrom->street1 ?? '',
+                'line2' => $addressFrom->street2 ?? null,
+                'line3' => $addressFrom->street3 ?? null,
                 'city' => $addressFrom->city ?? '',
                 'state_province' => $addressFrom->state ?? '',
                 'postal_code' => $addressFrom->zip ?? '',
+                'phone_number' => $addressFrom->phone ?? 'any',
+                'sms' => $addressFrom->sms ?? null,
+                'email' => $addressFrom->email ?? ($order->user->email ?? 'any'),
                 'country_code' => $this->getCountryCode($addressFrom->country ?? ''),
-                'first_name' => $fromNameParts['first'],
-                'middle_name' => $fromNameParts['middle'] ?: 'any',
-                'last_name' => $fromNameParts['last'],
-                'company_name' => $addressFrom->company ?? '',
-                'email' => 'any',
-                'phone_number' => $addressFrom->phone ?? 'any'
-            ],
-            'to_address' => [
+            ]),
+            'to_address' => array_filter([
+                'company_name' => $addressTo->company ?? '',
+                'first_name' => $toNameParts['first'],
+                'middle_name' => $toNameParts['middle'],
+                'last_name' => $toNameParts['last'],
                 'line1' => $addressTo->street1 ?? '',
+                'line2' => $addressTo->street2 ?? null,
+                'line3' => $addressTo->street3 ?? null,
                 'city' => $addressTo->city ?? '',
                 'state_province' => $addressTo->state ?? '',
                 'postal_code' => $addressTo->zip ?? '',
+                'phone_number' => $addressTo->phone ?? null,
+                'sms' => $addressTo->sms ?? null,
+                'email' => $addressTo->email ?? null,
                 'country_code' => $this->getCountryCode($addressTo->country ?? ''),
-                'first_name' => $toNameParts['first'],
-                'middle_name' => $toNameParts['middle'] ?: 'any',
-                'last_name' => $toNameParts['last'],
-                'company_name' => $addressTo->company ?? '',
-                'email' => 'any',
-                'phone_number' => $addressTo->phone ?? 'any'
-            ],
-            'image_format' => 'png',
-            'metadata' => [
-                'rubberstamp1' => '',
-                'rubberstamp2' => '',
-                'rubberstamp3' => '',
-                'reference1' => '',
-                'reference2' => '',
-                'reference3' => '',
-                'customReferenceKey1' => '',
-                'customReferenceValue1' => ''
-            ],
-            'weight_unit' => $weight['unit'],
+            ]),
             'weight' => $weight['weight'],
-            'dimensions_unit' => $dimensions['unit'],
-            'dimensions' => [
+            'weight_unit' => $weight['unit'],
+            'image_format' => 'png',
+            'image_resolution' => 300,
+        ];
+
+        if (!$payload['request_id']) {
+            unset($payload['request_id']);
+        }
+
+        if (!empty($dimensions['unit']) && $dimensions['length'] !== null && $dimensions['width'] !== null && $dimensions['height'] !== null) {
+            $payload['dimensions_unit'] = $dimensions['unit'];
+            $payload['dimensions'] = [
                 'length' => $dimensions['length'],
                 'width' => $dimensions['width'],
-                'height' => $dimensions['height']
-            ]
-        ];
+                'height' => $dimensions['height'],
+            ];
+        }
+
+        return $payload;
     }
 
     private function splitName($name)
@@ -2023,7 +2310,7 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
         $basicAuth = base64_encode($email . ':' . $password);
 
         foreach ($shapes as $shape) {
-            $payload['usps'] = $shape;
+            $payload['usps'] = $shape + ['image_size' => '4x6'];
             
             try {
                 $curl = curl_init();
@@ -2048,14 +2335,22 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
                 curl_close($curl);
 
                 if ($httpCode == 200) {
-                    $data = json_decode($response, true);
-                    if (isset($data['postage_amount'])) {
+                    // Handle response - could be string, array, or false
+                    if (is_array($response)) {
+                        $data = $response;
+                    } elseif (is_string($response) && $response !== '') {
+                        $data = json_decode($response, true);
+                    } else {
+                        $data = null;
+                    }
+                    
+                    if ($data && isset($data['postage_amount'])) {
                         $data['shape'] = $shape['shape'];
                         $data['mail_class'] = $shape['mail_class'];
                         $rates[] = $data;
                     }
                 } else {
-                    Log::warning('Myib API error for shape ' . $shape['shape'] . ': ' . $response);
+                    Log::warning('Myib API error for shape ' . $shape['shape'] . ': ' . (is_string($response) ? $response : json_encode($response)));
                 }
             } catch (Exception $e) {
                 Log::error('Myib API exception for shape ' . $shape['shape'] . ': ' . $e->getMessage());
@@ -2149,34 +2444,43 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
     private function createMyibTransaction($orderRate, $order, $orderPackage)
     {
         try {
-            // Get the stored rate data from object_id
-            $rateData = json_decode($orderRate->object_id, true);
+            // Safely decode attributes - could be string, array, or null
+            $attributes = null;
+            if (is_string($orderRate->attributes) && $orderRate->attributes !== '') {
+                $attributes = json_decode($orderRate->attributes, true);
+            } elseif (is_array($orderRate->attributes)) {
+                $attributes = $orderRate->attributes;
+            }
             
-            // Get addresses
-            $addressFrom = OrderAddress::where('id', $order->order_address_from_id)->first();
-            $addressTo = OrderAddress::where('id', $order->order_address_to_id)->first();
-
-            // Convert dimensions and weight
+            if (!is_array($attributes)) {
+                $attributes = [];
+            }
             $dimensions = $this->convertDimensionsToMyib($orderPackage);
             $weight = $this->convertWeightToMyib($orderPackage);
+            $requestId = $this->sanitizeMyibRequestId($order->order_number ?? (string)$order->id);
 
-            // Prepare payload for Myib label creation API
-            $payload = $this->prepareMyibPayload($order, $dimensions, $weight);
-            
-            // Add the selected rate shape and mail class
-            $attributes = json_decode($orderRate->attributes, true);
+            $payload = $this->prepareMyibPayload($order, $dimensions, $weight, $requestId);
             $payload['usps'] = [
                 'mail_class' => $attributes['mail_class'] ?? 'Priority',
-                'shape' => $attributes['shape'] ?? 'Parcel'
+                'shape' => $attributes['shape'] ?? 'Parcel',
+                'image_size' => '4x6',
             ];
 
-            // Call Myib API to create label
-            $apiUrl = 'https://api.myibservices.com/v1/label';
+            $apiUrl = 'https://api.myibservices.com/v1/labels';
             $email = config('app.myib_email');
             $password = config('app.myib_password');
-            
-            // Generate Basic Auth header
+
+            if (!$email || !$password) {
+                Log::error('Myib credentials not configured');
+                return [
+                    'value' => null,
+                    'errorMsg' => ['Myib API credentials not configured']
+                ];
+            }
+
             $basicAuth = base64_encode($email . ':' . $password);
+
+            Log::info('Myib create label request', ['payload' => $payload, 'request_id' => $requestId]);
 
             $curl = curl_init();
             curl_setopt_array($curl, [
@@ -2196,38 +2500,259 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
             ]);
 
             $response = curl_exec($curl);
+            $curlError = curl_error($curl);
             $httpCode = curl_getinfo($curl, CURLINFO_HTTP_CODE);
             curl_close($curl);
 
+            // Console log response
+            Log::info('Myib create label response', [
+                'http_code' => $httpCode,
+                'response' => $response,
+                'curl_error' => $curlError
+            ]);
+
+            if ($curlError) {
+                Log::error('Myib API curl error: ' . $curlError);
+                return [
+                    'value' => null,
+                    'errorMsg' => ['Network error: ' . $curlError]
+                ];
+            }
+
             if ($httpCode == 200) {
-                $data = json_decode($response, true);
+                // Handle response - could be string, array, or false
+                if (is_array($response)) {
+                    $data = $response;
+                } elseif (is_string($response) && $response !== '') {
+                    $data = json_decode($response, true);
+                    if (json_last_error() !== JSON_ERROR_NONE) {
+                        Log::error('Myib API invalid JSON response: ' . $response);
+                        return [
+                            'value' => null,
+                            'errorMsg' => ['Invalid response from Myib API']
+                        ];
+                    }
+                } else {
+                    Log::error('Myib API empty or invalid response');
+                    return [
+                        'value' => null,
+                        'errorMsg' => ['Empty response from Myib API']
+                    ];
+                }
                 
-                // Extract label URL and tracking number from response
-                // Adjust these fields based on actual Myib API response structure
+                if (!is_array($data)) {
+                    Log::error('Myib API response is not an array', ['data' => $data]);
+                    return [
+                        'value' => null,
+                        'errorMsg' => ['Invalid response format from Myib API']
+                    ];
+                }
+
+                $trackingNumbers = $data['usps']['tracking_numbers'] ?? [];
+                $trackingNumber = is_array($trackingNumbers) && count($trackingNumbers) > 0
+                    ? ($trackingNumbers[0] ?? null)
+                    : (is_string($trackingNumbers) ? $trackingNumbers : null);
+                $transactionId = $data['request_id'] ?? $data['id'] ?? $requestId;
+
+                $labelUrl = $data['label_url'] ?? $data['label'] ?? null;
+                $base64Labels = $data['base64_labels'] ?? null;
+
+                if (!$labelUrl && $base64Labels) {
+                    if (is_array($base64Labels) && count($base64Labels) > 0) {
+                        $firstLabel = $base64Labels[0] ?? null;
+                        if (is_array($firstLabel) && isset($firstLabel['label'])) {
+                            $base64Labels = $firstLabel['label'];
+                        } elseif (is_string($firstLabel)) {
+                            $base64Labels = $firstLabel;
+                        } else {
+                            $base64Labels = null;
+                        }
+                    }
+
+                    if (is_string($base64Labels) && $base64Labels !== '') {
+                        if (Str::startsWith($base64Labels, 'data:')) {
+                            $parts = explode(',', $base64Labels, 2);
+                            $base64Labels = $parts[1] ?? '';
+                        }
+
+                        $decoded = base64_decode($base64Labels, true);
+                        if ($decoded !== false && strlen($decoded) > 0) {
+                            try {
+                                $extension = strtolower($payload['image_format'] ?? 'png');
+                                if (!in_array($extension, ['png', 'pdf', 'jpg', 'jpeg'])) {
+                                    $extension = 'png';
+                                }
+
+                                $folder = 'uploads/PNX_LABEL/' . date('Ym');
+                                $fileName = $transactionId . '.' . $extension;
+                                $relativePath = $folder . '/' . $fileName;
+
+                                Storage::disk('public')->put($relativePath, $decoded);
+                                $labelUrl = asset('storage/' . $relativePath);
+                                Log::info('Myib label saved', ['path' => $relativePath, 'url' => $labelUrl]);
+                            } catch (Exception $e) {
+                                Log::error('Myib label save error: ' . $e->getMessage());
+                            }
+                        }
+                    }
+                }
+
+                $amount = null;
+                $currency = 'USD';
+
+                if (isset($data['total_amount'])) {
+                    $totalAmount = $data['total_amount'];
+                    if (is_array($totalAmount)) {
+                        $currency = $totalAmount['currency'] ?? $currency;
+                        $amount = $totalAmount['amount'] ?? $totalAmount['value'] ?? null;
+                    } else {
+                        $amount = $totalAmount;
+                    }
+                } elseif (isset($data['postage_amount'])) {
+                    $postageAmount = $data['postage_amount'];
+                    if (is_array($postageAmount)) {
+                        $currency = $postageAmount['currency'] ?? $currency;
+                        $amount = $postageAmount['amount'] ?? $postageAmount['value'] ?? null;
+                    } else {
+                        $amount = $postageAmount;
+                    }
+                }
+
+                if ($amount === null) {
+                    $amount = $orderRate->amount ?? 0;
+                }
+
+                Log::info('Myib label created successfully', [
+                    'tracking_number' => $trackingNumber,
+                    'label_url' => $labelUrl,
+                    'amount' => $amount
+                ]);
+
                 return [
                     'value' => [
-                        'object_id' => $data['label_id'] ?? $data['id'] ?? null,
-                        'label_url' => $data['label_url'] ?? $data['label'] ?? null,
-                        'tracking_number' => $data['tracking_number'] ?? $data['tracking'] ?? null,
+                        'object_id' => $transactionId,
+                        'label_url' => $labelUrl,
+                        'tracking_number' => $trackingNumber,
                         'tracking_status' => $data['status'] ?? 'Unknown',
                         'tracking_url_provider' => $data['tracking_url'] ?? null,
+                        'amount' => $amount !== null ? round((float) $amount, 2) : null,
+                        'currency' => $currency,
                     ],
                     'errorMsg' => []
                 ];
-            } else {
-                Log::error('Myib create label API error: ' . $response);
-                return [
-                    'value' => null,
-                    'errorMsg' => ['Failed to create label from Myib API: ' . $response]
-                ];
             }
+
+            // Handle response - could be string, array, or false
+            if (is_array($response)) {
+                $decodedResponse = $response;
+            } elseif (is_string($response) && $response !== '') {
+                $decodedResponse = json_decode($response, true);
+            } else {
+                $decodedResponse = null;
+            }
+            
+            $errorMessage = $this->parseMyibErrorData($decodedResponse ?? $response) ?: 'Failed to create label from Myib API (HTTP ' . $httpCode . ')';
+            Log::error('Myib create label API error', [
+                'http_code' => $httpCode,
+                'response' => $response,
+                'error' => $errorMessage
+            ]);
+
+            return [
+                'value' => null,
+                'errorMsg' => [$errorMessage]
+            ];
         } catch (Exception $e) {
-            Log::error('createMyibTransaction Exception: ' . $e->getMessage());
+            Log::error('createMyibTransaction Exception', [
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString()
+            ]);
             return [
                 'value' => null,
                 'errorMsg' => [$e->getMessage()]
             ];
         }
+    }
+
+    private function parseMyibErrorData($data): string
+    {
+        if (is_string($data)) {
+            return $data;
+        }
+
+        if (is_array($data)) {
+            $messages = [];
+
+            if (isset($data['message'])) {
+                $messages[] = is_array($data['message']) ? implode(' | ', $data['message']) : $data['message'];
+            }
+
+            if (isset($data['error'])) {
+                if (is_string($data['error'])) {
+                    $messages[] = $data['error'];
+                } elseif (is_array($data['error'])) {
+                    $messages[] = json_encode($data['error']);
+                }
+            }
+
+            if (isset($data['errors']) && is_array($data['errors'])) {
+                $collected = [];
+                array_walk_recursive($data['errors'], function ($value) use (&$collected) {
+                    if (is_string($value) && $value !== '') {
+                        // Check if it's a JSON string, if so try to decode and extract message
+                        $decoded = json_decode($value, true);
+                        if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                            // It's a valid JSON, extract meaningful error messages
+                            if (isset($decoded['message'])) {
+                                $collected[] = is_array($decoded['message']) ? implode(' | ', $decoded['message']) : $decoded['message'];
+                            } elseif (isset($decoded['error'])) {
+                                $collected[] = is_array($decoded['error']) ? implode(' | ', $decoded['error']) : $decoded['error'];
+                            } else {
+                                // If it's a complex JSON, just use a simple message
+                                $collected[] = 'API validation error';
+                            }
+                        } else {
+                            // Not a JSON string, use it as is
+                            $collected[] = $value;
+                        }
+                    }
+                });
+                if (count($collected)) {
+                    $messages[] = implode(' | ', $collected);
+                }
+            }
+
+            if (!count($messages) && !empty($data)) {
+                // Try to extract meaningful information from the data
+                if (is_array($data)) {
+                    // If it's an array, try to find any string values that might be error messages
+                    $flatData = [];
+                    array_walk_recursive($data, function ($value) use (&$flatData) {
+                        if (is_string($value) && strlen($value) < 200) { // Only short strings
+                            $flatData[] = $value;
+                        }
+                    });
+                    if (count($flatData)) {
+                        $messages[] = implode(' | ', array_slice($flatData, 0, 3)); // Limit to first 3 messages
+                    } else {
+                        $messages[] = 'API returned an error';
+                    }
+                } else {
+                    $messages[] = is_string($data) ? $data : 'API returned an error';
+                }
+            }
+
+            $result = implode(' | ', array_unique(array_filter($messages)));
+            return $result ?: 'Unknown error from MyIB API';
+        }
+
+        if (is_object($data)) {
+            return json_encode($data);
+        }
+
+        return '';
     }
 
     public function orderPrintMultiple($orderCodeIds)

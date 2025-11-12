@@ -1388,7 +1388,10 @@ $data['extension'] = $extension;
                     ->with('errorData', $data);
             }
 
-            return redirect()->route('staff.orders.rates.create', ['orderId' => $orderId])
+            // Store provider in session to filter rates
+            session(['label_provider' => 'myib']);
+
+            return redirect()->route('staff.orders.rates.create', ['orderId' => $orderId, 'provider' => 'myib'])
                 ->with('success', "Create successed. Please choose rate.");
 
         } catch (Exception $e) {
@@ -1591,7 +1594,10 @@ $data['extension'] = $extension;
                     ->with('errorData', $data);
             }
 
-            return redirect()->route('staff.orders.rates.create', ['orderId' => $orderId])
+            // Store provider in session to filter rates
+            session(['label_provider' => 'shippo']);
+
+            return redirect()->route('staff.orders.rates.create', ['orderId' => $orderId, 'provider' => 'shippo'])
                 ->with('success', "Create successed. Please choose rate.");
         } catch (Exception $e) {
             Log::error($e);
@@ -1603,11 +1609,14 @@ $data['extension'] = $extension;
     public function createRate(Request $request, $orderId)
     {
         try {
-            $rates = $this->orderService->getRates($orderId);
+            // Get provider from session or request, default to null (show all)
+            $provider = session('label_provider') ?? $request->get('provider');
+            $rates = $this->orderService->getRates($orderId, $provider);
 
             return view('order.create_rate', [
                 'orderId' => $orderId,
-                'rates' => $rates
+                'rates' => $rates,
+                'provider' => $provider
             ]);
         } catch (Exception $e) {
             Log::error($e);
@@ -1617,19 +1626,33 @@ $data['extension'] = $extension;
     }
 
     public function storeRate(Request $request, $orderId)
-    {
-        try {
-            // Mua labelxxx 3
-            $params = $request->only('rate');
-            $data = $this->orderService->storeRate($params['rate'], $orderId);
-
-            return $data['errorMsg'];
-        } catch (Exception $e) {
-            Log::error($e);
-
-            return ["Something wrong! Please contact admin for more information!"];
+{
+    try {
+        $rate = $request->input('rate');
+        if (!$rate) {
+            return response()->json(['errors' => ['Rate ID is required']], 422);
         }
+
+        $data = $this->orderService->storeRate($rate, $orderId);
+
+        if (!empty($data['errorMsg'])) {
+            return response()->json(['errors' => $data['errorMsg']], 400);
+        }
+
+        session()->forget('label_provider');
+        return response()->json(['success' => true]);
+       
+    } catch (Exception $e) {
+        Log::error('storeRate Exception', [
+            'message' => $e->getMessage(),
+            'file' => $e->getFile(),
+            'line' => $e->getLine(),
+            'order_id' => $orderId
+        ]);
+
+        return response()->json(['errors' => ['Something wrong! Please contact admin for more information!']], 500);
     }
+}
 
     public function orderPrintMultiple(Request $request)
     {

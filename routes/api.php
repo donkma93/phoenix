@@ -10,6 +10,7 @@ use App\Models\PickupRequest;
 use App\Http\Controllers\WebhookShippoController;
 use App\Http\Controllers\WebhookG7Controller;
 use App\Http\Controllers\Webhook17trackController;
+use App\Http\Controllers\WebhookMyibController;
 use App\Http\Controllers\User\UserOrderController;
 use App\Http\Controllers\User\UserPackageGroupController;
 
@@ -139,38 +140,7 @@ Route::middleware(['jwt.verify'])->group(function () {
 
 Route::post('/webhook-shippo', [WebhookShippoController::class, 'handle_data'])->name('webhook.shippo');
 
-Route::post('/myib-webhook', function (Request $request) {
-    // Ghi log toàn bộ dữ liệu webhook gửi đến
-    Log::info('📦 Webhook từ MyIB:', $request->all());
-
-    // (Tuỳ chọn) kiểm tra secret nếu bạn đặt trong MyIB
-    $headerSecret = $request->header('X-Webhook-Secret'); // nếu MyIB gửi qua header
-    $expectedSecret = 'phoenix_secret_123'; // chuỗi bạn nhập trong ô "Secret (optional)" của MyIB
-
-    if ($headerSecret && $headerSecret !== $expectedSecret) {
-        Log::warning('🚫 Webhook bị từ chối: Secret không khớp');
-        return response()->json(['error' => 'Invalid secret'], 403);
-    }
-
-    // Bạn có thể xử lý tùy theo loại event
-    $eventType = $request->input('event');
-    switch ($eventType) {
-        case 'Accepted Tracking Event Received':
-            // Xử lý khi đơn hàng được chấp nhận
-            break;
-        case 'Delivered Tracking Event Received':
-            // Xử lý khi đơn hàng đã giao
-            break;
-        case 'Returned to Sender Tracking Event Received':
-            // Xử lý khi đơn hoàn trả
-            break;
-        default:
-            Log::info('⚙️ Event khác:', ['type' => $eventType]);
-            break;
-    }
-
-    return response()->json(['status' => 'ok']);
-});
+Route::post('/myib-webhook', [WebhookMyibController::class, 'handleData'])->name('webhook.myib');
 
 Route::post('/webhook-label-g7', [WebhookG7Controller::class, 'handleData'])
     ->name('webhook.label.g7')

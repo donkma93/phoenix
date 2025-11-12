@@ -162,10 +162,14 @@
         $('.update-rate').on('click', function(e) {
             e.preventDefault();
             const rateId = $(this).data('rate');
-
-            console.log(rateId);
+            
+            if (!rateId) {
+                alert('Rate ID is missing');
+                return;
+            }
+            
             loading(true);
-
+            
             $.ajax({
                 type: 'POST',
                 url: `{{ route('staff.orders.rates.store', ['orderId' => $orderId]) }}`,
@@ -173,29 +177,45 @@
                     rate: rateId,
                     _token: '{{csrf_token()}}'
                 },
-                success:function(data) {
-                    if (data.length) {
-                        loading(false);
-                        alert('Invalid Rate. Please choose another rate');
-
-                        errorsHtml = '<div class="alert alert-danger"><ul>';
-                        $.each(data, function (k,v) {
-                                errorsHtml += '<li>'+ v + '</li>';
-                        });
-                        errorsHtml += '</ul></di>';
-
-                        $( '#error_message' ).html( errorsHtml );
-                    } else {
-                        let url = "{{ route('staff.orders.list') }}";
-                        window.location.href = url;
-
-                        alert('Create success');
-                    }
-                },
-                error: function(err) {
-                    console.log(err)
+                success: function(data) {
+                    console.log(data,"dataaaa");
+    loading(false);
+    if (data.errors) {
+        let errorsHtml = '<div class="alert alert-danger"><ul>';
+        $.each(data.errors, function(k, v) {
+            errorsHtml += '<li>' + v + '</li>';
+        });
+        errorsHtml += '</ul></div>';
+        $('#error_message').html(errorsHtml);
+        alert('Invalid Rate. Please choose another rate');
+    } else {
+        alert('Create success');
+        window.location.href = "{{ route('staff.orders.list') }}";
+    }
+},
+                error: function(xhr, status, error) {
                     loading(false);
-                    alert('Something wrong! Please contact admin for more information!')
+                    console.error('AJAX Error:', {
+                        status: status,
+                        error: error,
+                        response: xhr.responseText
+                    });
+                    
+                    let errorMessage = 'Something wrong! Please contact admin for more information!';
+                    if (xhr.responseJSON && xhr.responseJSON.message) {
+                        errorMessage = xhr.responseJSON.message;
+                    } else if (xhr.responseText) {
+                        try {
+                            const response = JSON.parse(xhr.responseText);
+                            if (response.message) {
+                                errorMessage = response.message;
+                            }
+                        } catch (e) {
+                            // Keep default message
+                        }
+                    }
+                    
+                    alert(errorMessage);
                 }
             });
         });
