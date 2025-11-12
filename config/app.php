@@ -265,6 +265,18 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | MyIB API Credentials
+    |--------------------------------------------------------------------------
+    |
+    | Email and password for MyIB API Basic Authentication
+    |
+    */
+
+    'myib_email' => env('MYIB_EMAIL', ''),
+    'myib_password' => env('MYIB_PASSWORD', ''),
+
+    /*
+    |--------------------------------------------------------------------------
     | List tracking status
     |--------------------------------------------------------------------------
     | Lấy theo danh sách tracking status của shippo

@@ -2016,7 +2016,11 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
 
         $rates = [];
         $apiUrl = 'https://api.myibservices.com/v1/price';
-        $apiKey = config('app.myib_api_key'); // You'll need to add this to config
+        $email = config('app.myib_email');
+        $password = config('app.myib_password');
+        
+        // Generate Basic Auth header
+        $basicAuth = base64_encode($email . ':' . $password);
 
         foreach ($shapes as $shape) {
             $payload['usps'] = $shape;
@@ -2035,7 +2039,7 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
                     CURLOPT_POSTFIELDS => json_encode($payload),
                     CURLOPT_HTTPHEADER => [
                         'Content-Type: application/json',
-                        'Authorization: Bearer ' . $apiKey
+                        'Authorization: Basic ' . $basicAuth
                     ],
                 ]);
 
@@ -2166,11 +2170,13 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
                 'shape' => $attributes['shape'] ?? 'Parcel'
             ];
 
-            // TODO: Call Myib API to create label
-            // You'll need to find the correct Myib API endpoint for creating labels
-            // Example: POST https://api.myibservices.com/v1/label or similar
-            $apiUrl = 'https://api.myibservices.com/v1/label'; // Update with correct endpoint
-            $apiKey = config('app.myib_api_key');
+            // Call Myib API to create label
+            $apiUrl = 'https://api.myibservices.com/v1/label';
+            $email = config('app.myib_email');
+            $password = config('app.myib_password');
+            
+            // Generate Basic Auth header
+            $basicAuth = base64_encode($email . ':' . $password);
 
             $curl = curl_init();
             curl_setopt_array($curl, [
@@ -2185,7 +2191,7 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
                 CURLOPT_POSTFIELDS => json_encode($payload),
                 CURLOPT_HTTPHEADER => [
                     'Content-Type: application/json',
-                    'Authorization: Bearer ' . $apiKey
+                    'Authorization: Basic ' . $basicAuth
                 ],
             ]);
 

@@ -67,10 +67,12 @@
         .select2-container--default .select2-selection--single {
             height: calc(1.5em + 1rem + 5px) !important;
         }
+
         .select2-container--default .select2-selection--single .select2-selection__rendered {
             line-height: unset !important;
             padding-top: 0.625rem !important;
         }
+
         .select2-container--default .select2-selection--single .select2-selection__arrow {
             height: unset !important;
             top: 1.25rem !important;
@@ -110,34 +112,34 @@
 @section('content')
     <div class="content">
         @if (session('success'))
-        <div class="row justify-content-end">
-            <div class="col-md-4">
-                <div class="alert alert-success alert-dismissible fade show">
-                    <button type="button" aria-hidden="true" class="close" data-dismiss="alert" aria-label="Close">
-                        <i class="nc-icon nc-simple-remove"></i>
-                    </button>
-                    <span>
+            <div class="row justify-content-end">
+                <div class="col-md-4">
+                    <div class="alert alert-success alert-dismissible fade show">
+                        <button type="button" aria-hidden="true" class="close" data-dismiss="alert" aria-label="Close">
+                            <i class="nc-icon nc-simple-remove"></i>
+                        </button>
+                        <span>
                             <b> Success - </b>
                             {{ session('success') }}
                         </span>
+                    </div>
                 </div>
             </div>
-        </div>
         @endif
         @if (session('error'))
-        <div class="row justify-content-end">
-            <div class="col-md-4">
-                <div class="alert alert-danger alert-dismissible fade show">
-                    <button type="button" aria-hidden="true" class="close" data-dismiss="alert" aria-label="Close">
-                        <i class="nc-icon nc-simple-remove"></i>
-                    </button>
-                    <span>
+            <div class="row justify-content-end">
+                <div class="col-md-4">
+                    <div class="alert alert-danger alert-dismissible fade show">
+                        <button type="button" aria-hidden="true" class="close" data-dismiss="alert" aria-label="Close">
+                            <i class="nc-icon nc-simple-remove"></i>
+                        </button>
+                        <span>
                             <b> Error - </b>
                             {{ session('error') }}
                         </span>
+                    </div>
                 </div>
             </div>
-        </div>
         @endif
         <div class="fade-in">
             <div class="card px-4 py-2">
@@ -167,7 +169,7 @@
                                             <input type="hidden" class="form-control" name="order_id"
                                                 value="{{ $order->id ?? '' }}" />
                                             <input type="hidden" class="form-control" name="order_code"
-                                                   value="{{ $order->order_code ?? '' }}" />
+                                                value="{{ $order->order_code ?? '' }}" />
                                             <b>{{ __('Receiver Name') }}</b>
                                             <p class="m-0">
                                                 {{ $order['addressTo']['name'] ?? '' }}
@@ -320,16 +322,16 @@
                                     <div class="row amx-n4">
                                         <div class="col-12 col-md-5 col-xl-4 apx-4 amb-8 form-group">
                                             <b>{{ __('Sender Country *') }}</b>
-                                            {{--<input type="text" class="form-control" name="shipping_country"
+                                            {{-- <input type="text" class="form-control" name="shipping_country"
                                                 id="shipping_country" placeholder="Example: 'US' or 'DE'"
-                                                value="{{ $errorData['shipping_country'] ?? (old('shipping_country') ?? '') }}" />--}}
+                                                value="{{ $errorData['shipping_country'] ?? (old('shipping_country') ?? '') }}" /> --}}
 
                                             <select name="shipping_country" id="shipping_country" class="form-control">
                                                 <option value="">Select Country</option>
-                                                @foreach($countries as $country)
-                                                    <option data-id="{{ $country->id }}" value="{{ strtoupper($country->code) }}"
-                                                        {{ old('shipping_country') !== null && strtoupper(old('shipping_country')) == strtoupper($country->code) ? 'selected' : '' }}
-                                                    >
+                                                @foreach ($countries as $country)
+                                                    <option data-id="{{ $country->id }}"
+                                                        value="{{ strtoupper($country->code) }}"
+                                                        {{ old('shipping_country') !== null && strtoupper(old('shipping_country')) == strtoupper($country->code) ? 'selected' : '' }}>
                                                         {{ $country->name . ' [' . $country->code . ']' }}
                                                     </option>
                                                 @endforeach
@@ -411,16 +413,16 @@
                                     <div class="row amx-n4">
                                         <div class="col-12 col-md-5 col-xl-4 apx-4 amb-8 form-group">
                                             <b>{{ __('Sender Province *') }}</b>
-                                            {{--<input type="text" class="form-control" name="shipping_province"
+                                            {{-- <input type="text" class="form-control" name="shipping_province"
                                                 id="shipping_province" placeholder="Example: 'CA' or 'NY'"
-                                                value="{{ $errorData['shipping_province'] ?? (old('shipping_province') ?? '') }}" />--}}
+                                                value="{{ $errorData['shipping_province'] ?? (old('shipping_province') ?? '') }}" /> --}}
 
                                             <select name="shipping_province" id="shipping_province" class="form-control">
                                                 <option value="">Select State/Province</option>
-                                                @foreach($states as $state)
-                                                    <option data-id="{{ $state->id }}" value="{{ strtoupper($state->state_code) }}"
-                                                        {{ old('shipping_province') !== null && strtoupper(old('shipping_province')) == strtoupper($state->state_code) ? 'selected' : '' }}
-                                                    >
+                                                @foreach ($states as $state)
+                                                    <option data-id="{{ $state->id }}"
+                                                        value="{{ strtoupper($state->state_code) }}"
+                                                        {{ old('shipping_province') !== null && strtoupper(old('shipping_province')) == strtoupper($state->state_code) ? 'selected' : '' }}>
                                                         {{ $state->name . ' [' . $state->state_code . ']' }}
                                                     </option>
                                                 @endforeach
@@ -434,16 +436,16 @@
                                                 id="shipping_city" placeholder="Example: 'SAN DIEGO'"
                                                 value="{{ $errorData['shipping_city'] ?? (old('shipping_city') ?? '') }}" />
 
-                                            {{--<select name="shipping_city" id="shipping_city" class="form-control">
+                                            {{-- <select name="shipping_city" id="shipping_city" class="form-control">
                                                 <option value="">Select City</option>
-                                                @foreach($cities as $city)
+                                                @foreach ($cities as $city)
                                                     <option data-id="{{ $city->id }}" value="{{ strtoupper($city->name) }}"
                                                         {{ old('shipping_city') !== null && strtoupper(old('shipping_city')) == strtoupper($city->name) ? 'selected' : '' }}
                                                     >
                                                         {{ $city->name }}
                                                     </option>
                                                 @endforeach
-                                            </select>--}}
+                                            </select> --}}
 
                                             <span class="form_message"></span>
                                         </div>
@@ -748,9 +750,9 @@
                                         value="{{ __('Create Label') }}">
                                 </div>
                                 <!-- <div class="text-center text-sm-left ml-2">
-                                    <input class="btn btn-success btn-round create_label_g7" type="button"
-                                        value="{{ __('Buy labels via g7') }}">
-                                </div> -->
+                                            <input class="btn btn-success btn-round create_label_g7" type="button"
+                                                value="{{ __('Buy labels via g7') }}">
+                                        </div> -->
                                 <div class="text-center text-sm-left ml-2">
                                     <input class="btn btn-primary btn-round create_label_myib" type="button"
                                         value="{{ __('Buy labels via Myib') }}">
@@ -793,8 +795,8 @@
                             <div class="col-12 col-md-6 form-group">
                                 <b>{{ __('Shipping Carrier Name *') }}</b>
                                 <input type="text" class="form-control input_required" name=""
-                                       data-name="shipping_carrier" id="shipping_carrier"
-                                       value="{{ old('shipping_carrier') ?? '' }}" />
+                                    data-name="shipping_carrier" id="shipping_carrier"
+                                    value="{{ old('shipping_carrier') ?? '' }}" />
                                 <span class="form_message"></span>
                             </div>
                         </div>
@@ -802,8 +804,8 @@
                             <div class="col-12 col-md-6 form-group">
                                 <b>{{ __('Amount (VND) *') }}</b>
                                 <input type="number" class="form-control input_required" name="" min="0"
-                                       step="1" data-name="amount" value="0" id="amount"
-                                       value="{{ old('amount') ?? '' }}" />
+                                    step="1" data-name="amount" value="0" id="amount"
+                                    value="{{ old('amount') ?? '' }}" />
                                 <span class="form_message"></span>
                             </div>
                             <div class="col-12 col-md-6 form-group">
@@ -856,7 +858,7 @@
                 if (is_confirm) {
                     let $this = $(this);
                     $this.prop('disabled', true);
-                    setTimeout(function () {
+                    setTimeout(function() {
                         $this.prop('disabled', false);
                     }, 10000)
 
@@ -867,19 +869,20 @@
             })
 
             $('.create_label_myib').on('click', function() {
-                let isValidate = true;
+                console.log('========================================');
+                console.log('🚀 [MYIB] Button clicked - Starting process');
+                console.log('========================================');
 
-                // Validate required fields similar to create_label_other
-                input_add_info.forEach(function(input) {
-                    if (input.value.trim() === '') {
-                        isValidate = false;
-                        input.parentElement.classList.add('invalid');
-                        input.parentElement.querySelector('.form_message').innerText =
-                            'Vui lòng nhập trường này!';
-                    }
-                })
+                let isValidate = true;
+                let validationErrors = [];
+
+                // Clear previous validation errors
+                console.log('[MYIB] Clearing previous validation errors...');
+                $('.form-group').removeClass('invalid');
+                $('.form_message').text('');
 
                 // Validate form fields
+                console.log('[MYIB] Starting form validation...');
                 let requiredFields = [
                     '#shipping_name',
                     '#shipping_country',
@@ -895,60 +898,121 @@
 
                 requiredFields.forEach(function(fieldSelector) {
                     let field = $(fieldSelector);
-                    if (!field.length || field.val().trim() === '' || field.val() == 0) {
+                    if (!field.length) {
+                        console.warn('[MYIB] ⚠️ Field not found: ' + fieldSelector);
+                        validationErrors.push('Field not found: ' + fieldSelector);
                         isValidate = false;
-                        field.closest('.form-group').addClass('invalid');
-                        let errorMsg = field.closest('.form-group').find('.form_message');
-                        if (errorMsg.length) {
-                            errorMsg.text('Vui lòng nhập trường này!');
+                    } else {
+                        let fieldValue = field.val();
+                        console.log('[MYIB] Checking field ' + fieldSelector + ' = "' + fieldValue +
+                            '"');
+                        if (fieldValue.trim() === '' || fieldValue == 0) {
+                            console.warn('[MYIB] ⚠️ Field is empty or zero: ' + fieldSelector);
+                            validationErrors.push('Empty field: ' + fieldSelector);
+                            isValidate = false;
+                            field.closest('.form-group').addClass('invalid');
+                            let errorMsg = field.closest('.form-group').find('.form_message');
+                            if (errorMsg.length) {
+                                errorMsg.text('Vui lòng nhập trường này!');
+                            }
                         }
                     }
                 });
 
                 // Validate size_type and weight_type
+                console.log('[MYIB] Validating size_type and weight_type...');
                 let sizeType = $('#size_type');
                 if (!sizeType.length || !sizeType.val() || sizeType.val().trim() === '') {
+                    console.warn('[MYIB] ⚠️ size_type is missing or empty');
+                    validationErrors.push('size_type is required');
                     isValidate = false;
-                    sizeType.closest('.form-group').addClass('invalid');
-                    let errorMsg = sizeType.closest('.form-group').find('.form_message');
+                    sizeType.closest('.form-group, .apx-4').addClass('invalid');
+                    let errorMsg = sizeType.closest('.form-group, .apx-4').find('.form_message');
                     if (errorMsg.length) {
                         errorMsg.text('Vui lòng chọn loại kích thước!');
                     }
+                } else {
+                    console.log('[MYIB] ✓ size_type = ' + sizeType.val());
                 }
 
                 let weightType = $('#weight_type');
                 if (!weightType.length || !weightType.val() || weightType.val().trim() === '') {
+                    console.warn('[MYIB] ⚠️ weight_type is missing or empty');
+                    validationErrors.push('weight_type is required');
                     isValidate = false;
-                    weightType.closest('.form-group').addClass('invalid');
-                    let errorMsg = weightType.closest('.form-group').find('.form_message');
+                    weightType.closest('.form-group, .apx-4').addClass('invalid');
+                    let errorMsg = weightType.closest('.form-group, .apx-4').find('.form_message');
                     if (errorMsg.length) {
                         errorMsg.text('Vui lòng chọn loại trọng lượng!');
                     }
+                } else {
+                    console.log('[MYIB] ✓ weight_type = ' + weightType.val());
                 }
 
                 if (isValidate) {
+                    console.log('[MYIB] ✅ Validation passed! All fields are valid.');
+                    console.log('[MYIB] Showing confirmation dialog...');
+
                     let is_confirm = confirm('Are you sure you want to create a label?');
 
                     if (is_confirm) {
+                        console.log('[MYIB] ✅ User confirmed. Proceeding with form submission...');
+
                         let $this = $(this);
                         $this.prop('disabled', true);
-                        setTimeout(function () {
+                        console.log('[MYIB] Button disabled to prevent double-click');
+
+                        setTimeout(function() {
                             $this.prop('disabled', false);
+                            console.log('[MYIB] Button re-enabled after 10 seconds');
                         }, 10000)
 
                         let url = "{{ route('staff.orders.labels.create.myib') }}";
-                        $('#create_label_form').prop('action', url);
-                        $('#create_label_form').submit();
+                        console.log('[MYIB] 📤 Form submission URL: ' + url);
+
+                        let $form = $('#create_label_form');
+                        if ($form.length) {
+                            console.log('[MYIB] ✓ Form found, setting action and submitting...');
+                            console.log('[MYIB] Form action before: ' + $form.attr('action'));
+
+                            $form.prop('action', url);
+                            console.log('[MYIB] Form action after: ' + $form.attr('action'));
+
+                            // Log form data
+                            let formData = $form.serialize();
+                            console.log('[MYIB] Form data: ' + formData.substring(0, 200) + '...');
+
+                            console.log('[MYIB] 🚀 Submitting form now...');
+                            $form.submit();
+                            console.log('[MYIB] ✅ Form submitted successfully!');
+                        } else {
+                            console.error('[MYIB] ❌ ERROR: Form #create_label_form not found!');
+                            alert('Lỗi: Không tìm thấy form. Vui lòng tải lại trang.');
+                        }
+                    } else {
+                        console.log('[MYIB] ❌ User cancelled confirmation dialog');
                     }
                 } else {
+                    console.log('[MYIB] ❌ Validation failed!');
+                    console.log('[MYIB] Validation errors:', validationErrors);
+                    console.log('[MYIB] Total errors: ' + validationErrors.length);
+
                     // Scroll to first invalid field
-                    let firstInvalid = $('.form-group.invalid').first();
+                    let firstInvalid = $('.form-group.invalid, .apx-4.invalid').first();
                     if (firstInvalid.length) {
+                        console.log('[MYIB] Scrolling to first invalid field...');
                         $('html, body').animate({
                             scrollTop: firstInvalid.offset().top - 100
                         }, 500);
+                    } else {
+                        console.warn('[MYIB] ⚠️ No invalid fields found to scroll to');
+                        alert('Vui lòng điền đầy đủ thông tin bắt buộc!');
                     }
                 }
+
+                console.log('========================================');
+                console.log('[MYIB] Process completed');
+                console.log('========================================');
             })
 
             $('.create_label_normal').on('click', function() {
@@ -997,7 +1061,7 @@
                     if (is_confirm) {
                         let $this = $(this);
                         $this.prop('disabled', true);
-                        setTimeout(function () {
+                        setTimeout(function() {
                             $this.prop('disabled', false);
                         }, 10000)
 
@@ -1029,15 +1093,15 @@
                 }
             }*/
 
-            $('#shipping_country').on('change', function () {
-                let id = $('option:selected',this).data("id");
+            $('#shipping_country').on('change', function() {
+                let id = $('option:selected', this).data("id");
                 if (!!id) {
                     getStatesByCountryId(id);
                 }
             })
 
-            $('#shipping_province').on('change', function () {
-                let id = $('option:selected',this).data("id");
+            $('#shipping_province').on('change', function() {
+                let id = $('option:selected', this).data("id");
                 if (!!id) {
                     getCitiesByStateId(id);
                 }
@@ -1052,18 +1116,19 @@
                         _token: '{{ csrf_token() }}'
                     },
                     dataType: 'json',
-                    success: function (res) {
+                    success: function(res) {
                         console.log(res)
                         if (res.length > 0) {
                             let html = '';
-                            res.forEach(function (e) {
-                                html += '<option data-id="' + e.id + '" value="' + e.name + '">' + e.name + '</option>'
+                            res.forEach(function(e) {
+                                html += '<option data-id="' + e.id + '" value="' + e.name +
+                                    '">' + e.name + '</option>'
                             })
 
                             $('select#shipping_city').html(html);
                         }
                     },
-                    error: function (err) {
+                    error: function(err) {
                         console.log(err)
                     }
                 })
@@ -1078,18 +1143,20 @@
                         _token: '{{ csrf_token() }}'
                     },
                     dataType: 'json',
-                    success: function (res) {
+                    success: function(res) {
                         console.log(res)
                         if (res.length > 0) {
                             let html = '';
-                            res.forEach(function (e) {
-                                html += '<option data-id="' + e.id + '" value="' + e.state_code.toUpperCase() + '">' + e.name + ' [' + e.state_code.toUpperCase() + ']' + '</option>'
+                            res.forEach(function(e) {
+                                html += '<option data-id="' + e.id + '" value="' + e.state_code
+                                    .toUpperCase() + '">' + e.name + ' [' + e.state_code
+                                    .toUpperCase() + ']' + '</option>'
                             })
 
                             $('select#shipping_province').html(html);
                         }
                     },
-                    error: function (err) {
+                    error: function(err) {
                         console.log(err)
                     }
                 })
