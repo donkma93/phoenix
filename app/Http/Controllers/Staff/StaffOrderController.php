@@ -1636,7 +1636,8 @@ $data['extension'] = $extension;
         $data = $this->orderService->storeRate($rate, $orderId);
 
         if (!empty($data['errorMsg'])) {
-            return response()->json(['errors' => $data['errorMsg']], 400);
+            $httpCode = $data['httpCode'] ?? 400;
+            return response()->json(['errors' => $data['errorMsg']], $httpCode);
         }
 
         session()->forget('label_provider');
