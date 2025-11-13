@@ -1722,6 +1722,8 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
 
             // Load order with necessary relationships
             $order = Order::with(['user', 'orderProducts.product'])->findOrFail($orderId);
+
+            Log::info('Order:: ' . json_encode($order));
             
             Log::info('Order loaded', ['order_id' => $order->id, 'order_number' => $order->order_number]);
             
@@ -2433,9 +2435,18 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
         ];
 
         $rates = [];
-        $apiUrl = 'https://api.myibservices.com/v1/price';
-        $email = config('app.myib_email');
-        $password = config('app.myib_password');
+        $baseUrl = rtrim((string) config('app.myib_base_url'), '/');
+        $apiUrl = $baseUrl ? $baseUrl . '/v1/price' : null;
+        $email = "support@tdfglobal.net";
+        $password = "TDFGlobal1412@";
+        Log::info('Myib base URL: ' . $baseUrl);
+        Log::info('Myib API URL: ' . $apiUrl);
+        Log::info('Myib email: ' . $email);
+        Log::info('Myib password: ' . $password);
+        if (!$apiUrl) {
+            Log::error('Myib base URL not configured');
+            return [];
+        }
         
         // Generate Basic Auth header
         $basicAuth = base64_encode($email . ':' . $password);
@@ -2481,7 +2492,27 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
                         $rates[] = $data;
                     }
                 } else {
+                    $decodedError = null;
+                    if (is_string($response) && $response !== '') {
+                        $decodedError = json_decode($response, true);
+                    } elseif (is_array($response)) {
+                        $decodedError = $response;
+                    }
+
                     Log::warning('Myib API error for shape ' . $shape['shape'] . ': ' . (is_string($response) ? $response : json_encode($response)));
+
+                    $errorCode = is_array($decodedError) ? ($decodedError['code'] ?? null) : null;
+                    $errorMessage = is_array($decodedError) ? ($decodedError['error'] ?? $decodedError['message'] ?? null) : null;
+
+                    // Stop trying other shapes when authentication or account lock errors occur
+                    if (in_array($httpCode, [401, 403], true) || in_array($errorCode, ['A0001', 'A0002'], true)) {
+                        Log::error('Myib authentication error encountered. Aborting additional rate requests.', [
+                            'http_code' => $httpCode,
+                            'code' => $errorCode,
+                            'message' => $errorMessage
+                        ]);
+                        break;
+                    }
                 }
             } catch (Exception $e) {
                 Log::error('Myib API exception for shape ' . $shape['shape'] . ': ' . $e->getMessage());
@@ -2585,9 +2616,20 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
     private function createMyibTransactionFromPayload($payload, $order)
     {
         try {
-            $apiUrl = 'https://api.myibservices.com/v1/labels';
-            $email = config('app.myib_email');
-            $password = config('app.myib_password');
+            $baseUrl = rtrim((string) config('app.myib_base_url'), '/');
+            Log::info('Myib base URL: ' . $baseUrl);
+            $apiUrl = $baseUrl ? $baseUrl . '/v1/labels' : null;
+            $email = "support@tdfglobal.net";
+            $password = "TDFGlobal1412@";
+
+            if (!$apiUrl) {
+                Log::error('Myib base URL not configured');
+                return [
+                    'value' => null,
+                    'errorMsg' => ['Myib API base URL not configured'],
+                    'httpCode' => 500
+                ];
+            }
 
             if (!$email || !$password) {
                 Log::error('Myib credentials not configured');
@@ -2615,7 +2657,7 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
                 CURLOPT_POSTFIELDS => json_encode($payload),
                 CURLOPT_HTTPHEADER => [
                     'Content-Type: application/json',
-                    'Authorization: Basic ' . $basicAuth
+            'Authorization: Basic ' . $basicAuth
                 ],
             ]);
 
@@ -2639,7 +2681,7 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
                 ];
             }
 
-            if ($httpCode == 200) {
+            if (in_array($httpCode, [200, 201], true)) {
                 // Handle response - could be string, array, or false
                 if (is_array($response)) {
                     $data = $response;
@@ -2823,9 +2865,21 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
                 'image_size' => '4x6',
             ];
 
-            $apiUrl = 'https://api.myibservices.com/v1/labels';
-            $email = config('app.myib_email');
-            $password = config('app.myib_password');
+            $baseUrl = rtrim((string) config('app.myib_base_url'), '/');
+            $apiUrl = $baseUrl ? $baseUrl . '/v1/labels' : null;
+            $email = "support@tdfglobal.net";
+            $password = "TDFGlobal1412@";
+            Log::info('Myib email: ' . $email);
+            Log::info('Myib password: ' . $password);
+            Log::info('Myib api URL: ' . $apiUrl);
+            if (!$apiUrl) {
+                Log::error('Myib base URL not configured');
+                return [
+                    'value' => null,
+                    'errorMsg' => ['Myib API base URL not configured'],
+                    'httpCode' => 500
+                ];
+            }
 
             if (!$email || !$password) {
                 Log::error('Myib credentials not configured');
@@ -2837,7 +2891,7 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
             }
 
             $basicAuth = base64_encode($email . ':' . $password);
-
+            
             Log::info('Myib create label request', ['payload' => $payload, 'request_id' => $requestId]);
 
             $curl = curl_init();
@@ -2878,7 +2932,7 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
                 ];
             }
 
-            if ($httpCode == 200) {
+            if (in_array($httpCode, [200, 201], true)) {
                 // Handle response - could be string, array, or false
                 if (is_array($response)) {
                     $data = $response;

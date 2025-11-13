@@ -274,6 +274,7 @@ return [
 
     'myib_email' => env('MYIB_EMAIL', ''),
     'myib_password' => env('MYIB_PASSWORD', ''),
+    'myib_base_url' => env('MYIB_BASE_URL', 'https://api.myibservices.com'),
 
     /*
     |--------------------------------------------------------------------------

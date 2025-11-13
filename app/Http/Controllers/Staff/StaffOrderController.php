@@ -169,7 +169,14 @@ class StaffOrderController extends StaffBaseController
                 $previewBtn = '';
                 if (isset($order->label_url) && ($order->picking_status ?? null) != 5) {
                     $labelUrl = asset($order->label_url);
-                    $previewBtn = '<button type="button" class="fmus01 btn btn-sm btn-round btn-success btn-block" data-toggle="modal" data-target="#preview-label" onclick="previewPDF(`' . $labelUrl . '`)">Preview</button>';
+                    // Check if file is an image
+                    $extension = strtolower(pathinfo($order->label_url, PATHINFO_EXTENSION));
+                    $imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp'];
+                    if (in_array($extension, $imageExtensions)) {
+                        $previewBtn = '<button type="button" class="fmus01 btn btn-sm btn-round btn-success btn-block" data-toggle="modal" data-target="#preview-label" onclick="previewImage(`' . $labelUrl . '`)">Preview</button>';
+                    } else {
+                        $previewBtn = '<button type="button" class="fmus01 btn btn-sm btn-round btn-success btn-block" data-toggle="modal" data-target="#preview-label" onclick="previewPDF(`' . $labelUrl . '`)">Preview</button>';
+                    }
                 }
                 $detailBtn = '<a class="btn btn-warning btn-round btn-sm btn-block" href="' . route('staff.orders.detail', ['id' => $order->id]) . '">Detail</a>';
 

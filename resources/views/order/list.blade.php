@@ -410,11 +410,19 @@
             }
 
             $("#preview-barcode").find("embed").remove();
+            $("#preview-barcode").find("img").remove();
             let embed = "<embed src=" + imgSrc +
                 " frameborder='0' width='100%' height='500px' headers='test' type='application/pdf' class='preview-pdf'>"
             $("#preview-barcode").append(embed);
 
 
+        }
+
+        function previewImage(file) {
+            $("#preview-barcode").find("embed").remove();
+            $("#preview-barcode").find("img").remove();
+            let img = "<img src='" + file + "' style='max-width: 100%; height: auto; display: block; margin: 0 auto;' alt='Preview'>";
+            $("#preview-barcode").append(img);
         }
 
 

@@ -7,6 +7,7 @@ Thêm các dòng sau vào file `.env`:
 ```env
 MYIB_EMAIL=your_email@example.com
 MYIB_PASSWORD=your_password
+MYIB_BASE_URL=https://api.myibservices.com
 ```
 
 ## Thông tin xác thực
@@ -19,7 +20,7 @@ MyIB API sử dụng **Basic Authentication** với:
 ## Đã cập nhật
 
 ✅ **config/app.php**
-- Thêm `myib_email` và `myib_password` từ `.env`
+- Thêm `myib_email`, `myib_password`, `myib_base_url` từ `.env`
 
 ✅ **app/Services/Staff/StaffOrderService.php**
 - `getMyibRates()` - Đã cập nhật để dùng Basic Auth
@@ -27,7 +28,7 @@ MyIB API sử dụng **Basic Authentication** với:
 
 ## Cách hoạt động
 
-1. Lấy email và password từ config
+1. Lấy email, password và base URL từ config
 2. Encode `email:password` bằng base64
 3. Gửi header: `Authorization: Basic {encoded_string}`
 4. Content-Type: `application/json`
