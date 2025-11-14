@@ -236,12 +236,16 @@ class Order extends Model
 
             if (isset($e->jsonBody)) {
                 foreach ($e->jsonBody as $fieldError) {
-                    foreach ($fieldError as $errorMsg) {
-                        $messages[] = $errorMsg;
+                    if (is_array($fieldError)) {
+                        foreach ($fieldError as $errorMsg) {
+                            $messages[] = is_string($errorMsg) ? $errorMsg : (string)$errorMsg;
+                        }
+                    } elseif (is_string($fieldError)) {
+                        $messages[] = $fieldError;
                     }
                 }
             } else {
-                $messages[] = ["Address Information is invalid."];
+                $messages[] = "Address Information is invalid.";
             }
 
             return [

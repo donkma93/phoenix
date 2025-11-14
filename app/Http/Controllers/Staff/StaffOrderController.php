@@ -169,7 +169,14 @@ class StaffOrderController extends StaffBaseController
                 $previewBtn = '';
                 if (isset($order->label_url) && ($order->picking_status ?? null) != 5) {
                     $labelUrl = asset($order->label_url);
-                    $previewBtn = '<button type="button" class="fmus01 btn btn-sm btn-round btn-success btn-block" data-toggle="modal" data-target="#preview-label" onclick="previewPDF(`' . $labelUrl . '`)">Preview</button>';
+                    // Check if file is an image
+                    $extension = strtolower(pathinfo($order->label_url, PATHINFO_EXTENSION));
+                    $imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp'];
+                    if (in_array($extension, $imageExtensions)) {
+                        $previewBtn = '<button type="button" class="fmus01 btn btn-sm btn-round btn-success btn-block" data-toggle="modal" data-target="#preview-label" onclick="previewImage(`' . $labelUrl . '`)">Preview</button>';
+                    } else {
+                        $previewBtn = '<button type="button" class="fmus01 btn btn-sm btn-round btn-success btn-block" data-toggle="modal" data-target="#preview-label" onclick="previewPDF(`' . $labelUrl . '`)">Preview</button>';
+                    }
                 }
                 $detailBtn = '<a class="btn btn-warning btn-round btn-sm btn-block" href="' . route('staff.orders.detail', ['id' => $order->id]) . '">Detail</a>';
 
@@ -889,6 +896,32 @@ $data['extension'] = $extension;
         }
     }
 
+    public function importLabelMyib(Request $request)
+    {
+        try {
+            $data = $this->orderService->storeExcelMyib(request()->file('label_file'), $request->all());
+
+            if (!$data['isValid']) {
+                return back()
+                    ->with('error', $data['message'] ?? '')
+                    ->with('csvErrorsMyib', $data['errors'] ?? [])
+                    ->with('errorsForeachMyib', $data['errorsArr'] ?? []);
+            }
+
+            if (count($data['ordersError']) > 0) {
+                Log::warning('IMPORT LABELS FAILED: ' . implode(', ', $data['ordersError']));
+
+                return redirect()->route('staff.orders.list')->with('warning', 'Create failed: ' . implode(', ', $data['ordersError']));
+            }
+
+            return redirect()->route('staff.orders.list')->with('success', "Create labels successful");
+        } catch (Exception $e) {
+            Log::error($e);
+
+            return redirect()->route('staff.orders.list')->with('error', "Create labels failed");
+        }
+    }
+
     /**
      * Create a new order.
      *
@@ -1346,6 +1379,34 @@ $data['extension'] = $extension;
         // exit();
     }
 
+    public function createLabelMyib(StoreLabelRequest $request)
+    {
+        Log::error('============ LOG START createLabelMyib Order code: ' . $request->get('order_code') . ' ============================================================');
+        try {
+            Log::error('===== LOG createLabelMyib (1)');
+
+            $orderId = $request->get('order_id');
+            $data = $this->orderService->storeLabelMyib($request->all(), $orderId);
+
+            if (count($data['errorMsg'])) {
+                Log::error('===== LOG createLabelMyib Error: ' . json_encode($data['errorMsg']));
+                return redirect()->back()
+                    ->with('fail', "Information is invalid.")
+                    ->with('errorData', $data);
+            }
+
+            // Store provider in session to filter rates
+            session(['label_provider' => 'myib']);
+
+            return redirect()->route('staff.orders.rates.create', ['orderId' => $orderId, 'provider' => 'myib'])
+                ->with('success', "Create successed. Please choose rate.");
+
+        } catch (Exception $e) {
+            Log::error('===== LOG createLabelMyib Exception: ' . $e->getMessage());
+            return redirect()->route('staff.orders.list')->with('fail', "Create new label failed");
+        }
+    }
+
     public function createLabelExcelView()
     {
         return view('order.import-create-label');
@@ -1540,7 +1601,10 @@ $data['extension'] = $extension;
                     ->with('errorData', $data);
             }
 
-            return redirect()->route('staff.orders.rates.create', ['orderId' => $orderId])
+            // Store provider in session to filter rates
+            session(['label_provider' => 'shippo']);
+
+            return redirect()->route('staff.orders.rates.create', ['orderId' => $orderId, 'provider' => 'shippo'])
                 ->with('success', "Create successed. Please choose rate.");
         } catch (Exception $e) {
             Log::error($e);
@@ -1552,11 +1616,14 @@ $data['extension'] = $extension;
     public function createRate(Request $request, $orderId)
     {
         try {
-            $rates = $this->orderService->getRates($orderId);
+            // Get provider from session or request, default to null (show all)
+            $provider = session('label_provider') ?? $request->get('provider');
+            $rates = $this->orderService->getRates($orderId, $provider);
 
             return view('order.create_rate', [
                 'orderId' => $orderId,
-                'rates' => $rates
+                'rates' => $rates,
+                'provider' => $provider
             ]);
         } catch (Exception $e) {
             Log::error($e);
@@ -1566,19 +1633,34 @@ $data['extension'] = $extension;
     }
 
     public function storeRate(Request $request, $orderId)
-    {
-        try {
-            // Mua labelxxx 3
-            $params = $request->only('rate');
-            $data = $this->orderService->storeRate($params['rate'], $orderId);
-
-            return $data['errorMsg'];
-        } catch (Exception $e) {
-            Log::error($e);
-
-            return ["Something wrong! Please contact admin for more information!"];
+{
+    try {
+        $rate = $request->input('rate');
+        if (!$rate) {
+            return response()->json(['errors' => ['Rate ID is required']], 422);
         }
+
+        $data = $this->orderService->storeRate($rate, $orderId);
+
+        if (!empty($data['errorMsg'])) {
+            $httpCode = $data['httpCode'] ?? 400;
+            return response()->json(['errors' => $data['errorMsg']], $httpCode);
+        }
+
+        session()->forget('label_provider');
+        return response()->json(['success' => true]);
+       
+    } catch (Exception $e) {
+        Log::error('storeRate Exception', [
+            'message' => $e->getMessage(),
+            'file' => $e->getFile(),
+            'line' => $e->getLine(),
+            'order_id' => $orderId
+        ]);
+
+        return response()->json(['errors' => ['Something wrong! Please contact admin for more information!']], 500);
     }
+}
 
     public function orderPrintMultiple(Request $request)
     {

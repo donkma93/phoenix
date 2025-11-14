@@ -257,6 +257,78 @@
                         </form>
                     </div>
                 </div>
+
+                <hr class="my-0">
+
+                {{-- Via Myib --}}
+                <div class="card-body">
+                    <div>
+                        <form method="POST" action="{{ route('staff.labels.import.excel.myib') }}" enctype="multipart/form-data"
+                              class="prevent-double-click">
+                            @csrf
+
+                            <div>
+                                <div class="d-flex justify-content-between align-items-center amb-12 apb-4">
+                                    <h4 class="amb-4 mt-0">{{ __('Buy labels via Myib') }}</h4>
+                                </div>
+
+                                <div class="form-group search-form-group mt-3">
+                                    <label for="image" class="search-label col-form-label">
+                                        <b>{{ __('File import') }}</b>
+                                    </label>
+                                    <div class="search-input">
+                                        <input type="file"
+                                               accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel"
+                                               hidden id="label_file_myib" name="label_file"
+                                               class="btn-primary form-control">
+                                        <span id="label_file_name_myib">No file selected</span>
+                                        <div class="btn w-100" onclick="uploadFileMyib()"> Upload File</div>
+                                        @if ($errors->has('label_file_myib'))
+                                            <p class="text-danger mb-0">
+                                                {{ $errors->first('label_file_myib') }}
+                                            </p>
+                                        @endif
+
+                                        @if (session('csvErrorsMyib') !== null)
+                                            @foreach (session('csvErrorsMyib') as $index => $error)
+                                                @php
+                                                    $line = $index + 2;
+                                                @endphp
+                                                <p class="text-danger mb-0">
+                                                    {{ "Line {$line}: {$error}" }}
+                                                </p>
+                                            @endforeach
+                                        @endif
+
+                                        @if (session('errorsForeachMyib') !== null)
+                                            @foreach (session('errorsForeachMyib') as $index => $error)
+                                                @php
+                                                    $line = $index + 2;
+                                                    $error = json_encode($error);
+                                                @endphp
+                                                <p class="text-danger mb-0">
+                                                    {{ "Line {$line}: {$error}" }}
+                                                </p>
+                                            @endforeach
+                                        @endif
+                                    </div>
+                                </div>
+
+                                <div class="form-group search-form-group">
+                                    <label for="image" class="search-label col-form-label">
+                                        <b>{{ __('') }}</b>
+                                    </label>
+                                    <div class="form-group mb-0">
+                                        <button type="submit" class="btn btn-info w-100">
+                                            {{ __('Create Labels') }}
+                                        </button>
+                                    </div>
+                                </div>
+
+                            </div>
+                        </form>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -281,6 +353,14 @@
                     $('#label_file_name_g7').text("No file selected");
                 }
             });
+
+            $('#label_file_myib').change(function () {
+                try {
+                    $('#label_file_name_myib').text($('#label_file_myib')[0].files[0].name);
+                } catch (error) {
+                    $('#label_file_name_myib').text("No file selected");
+                }
+            });
         });
 
         function uploadFileG7() {
@@ -289,6 +369,10 @@
 
         function uploadFileShippo() {
             $('#label_file_shippo').click();
+        }
+
+        function uploadFileMyib() {
+            $('#label_file_myib').click();
         }
     </script>
 @endpush
