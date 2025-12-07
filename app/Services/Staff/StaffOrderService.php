@@ -2439,6 +2439,8 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
         $apiUrl = $baseUrl ? $baseUrl . '/v1/price' : null;
         $email = "support@tdfglobal.net";
         $password = "TDFGlobal1412@";
+        // $email = "donpv.kma@gmail.com";
+        // $password = "Nammothai321@!#";
         Log::info('Myib base URL: ' . $baseUrl);
         Log::info('Myib API URL: ' . $apiUrl);
         Log::info('Myib email: ' . $email);
@@ -2621,6 +2623,8 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
             $apiUrl = $baseUrl ? $baseUrl . '/v1/labels' : null;
             $email = "support@tdfglobal.net";
             $password = "TDFGlobal1412@";
+            // $email = "donpv.kma@gmail.com";
+            // $password = "Nammothai321@!#";
 
             if (!$apiUrl) {
                 Log::error('Myib base URL not configured');
@@ -2749,12 +2753,32 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
                                 }
 
                                 $folder = 'uploads/PNX_LABEL/' . date('Ym');
-                                $fileName = $transactionId . '.' . $extension;
-                                $relativePath = $folder . '/' . $fileName;
-
-                                Storage::disk('public')->put($relativePath, $decoded);
-                                $labelUrl = asset('storage/' . $relativePath);
-                                Log::info('Myib label saved', ['path' => $relativePath, 'url' => $labelUrl]);
+                                
+                                // Convert image to PDF if the format is an image (png, jpg, jpeg)
+                                if (in_array($extension, ['png', 'jpg', 'jpeg'])) {
+                                    $pdfContent = $this->convertImageToPdf($decoded, $extension);
+                                    if ($pdfContent !== null) {
+                                        $fileName = $transactionId . '.pdf';
+                                        $relativePath = $folder . '/' . $fileName;
+                                        Storage::disk('public')->put($relativePath, $pdfContent);
+                                        $labelUrl = asset('storage/' . $relativePath);
+                                        Log::info('Myib label converted to PDF and saved', ['path' => $relativePath, 'url' => $labelUrl]);
+                                    } else {
+                                        // Fallback: save original image if PDF conversion fails
+                                        $fileName = $transactionId . '.' . $extension;
+                                        $relativePath = $folder . '/' . $fileName;
+                                        Storage::disk('public')->put($relativePath, $decoded);
+                                        $labelUrl = asset('storage/' . $relativePath);
+                                        Log::warning('Myib label PDF conversion failed, saved as image', ['path' => $relativePath, 'url' => $labelUrl]);
+                                    }
+                                } else {
+                                    // Already PDF, save directly
+                                    $fileName = $transactionId . '.' . $extension;
+                                    $relativePath = $folder . '/' . $fileName;
+                                    Storage::disk('public')->put($relativePath, $decoded);
+                                    $labelUrl = asset('storage/' . $relativePath);
+                                    Log::info('Myib label saved', ['path' => $relativePath, 'url' => $labelUrl]);
+                                }
                             } catch (Exception $e) {
                                 Log::error('Myib label save error: ' . $e->getMessage());
                             }
@@ -2869,6 +2893,8 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
             $apiUrl = $baseUrl ? $baseUrl . '/v1/labels' : null;
             $email = "support@tdfglobal.net";
             $password = "TDFGlobal1412@";
+            // $email = "donpv.kma@gmail.com";
+            // $password = "Nammothai321@!#";
             Log::info('Myib email: ' . $email);
             Log::info('Myib password: ' . $password);
             Log::info('Myib api URL: ' . $apiUrl);
@@ -3000,12 +3026,32 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
                                 }
 
                                 $folder = 'uploads/PNX_LABEL/' . date('Ym');
-                                $fileName = $transactionId . '.' . $extension;
-                                $relativePath = $folder . '/' . $fileName;
-
-                                Storage::disk('public')->put($relativePath, $decoded);
-                                $labelUrl = asset('storage/' . $relativePath);
-                                Log::info('Myib label saved', ['path' => $relativePath, 'url' => $labelUrl]);
+                                
+                                // Convert image to PDF if the format is an image (png, jpg, jpeg)
+                                if (in_array($extension, ['png', 'jpg', 'jpeg'])) {
+                                    $pdfContent = $this->convertImageToPdf($decoded, $extension);
+                                    if ($pdfContent !== null) {
+                                        $fileName = $transactionId . '.pdf';
+                                        $relativePath = $folder . '/' . $fileName;
+                                        Storage::disk('public')->put($relativePath, $pdfContent);
+                                        $labelUrl = asset('storage/' . $relativePath);
+                                        Log::info('Myib label converted to PDF and saved', ['path' => $relativePath, 'url' => $labelUrl]);
+                                    } else {
+                                        // Fallback: save original image if PDF conversion fails
+                                        $fileName = $transactionId . '.' . $extension;
+                                        $relativePath = $folder . '/' . $fileName;
+                                        Storage::disk('public')->put($relativePath, $decoded);
+                                        $labelUrl = asset('storage/' . $relativePath);
+                                        Log::warning('Myib label PDF conversion failed, saved as image', ['path' => $relativePath, 'url' => $labelUrl]);
+                                    }
+                                } else {
+                                    // Already PDF, save directly
+                                    $fileName = $transactionId . '.' . $extension;
+                                    $relativePath = $folder . '/' . $fileName;
+                                    Storage::disk('public')->put($relativePath, $decoded);
+                                    $labelUrl = asset('storage/' . $relativePath);
+                                    Log::info('Myib label saved', ['path' => $relativePath, 'url' => $labelUrl]);
+                                }
                             } catch (Exception $e) {
                                 Log::error('Myib label save error: ' . $e->getMessage());
                             }
@@ -3172,6 +3218,80 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
         }
 
         return '';
+    }
+
+    /**
+     * Convert image (PNG/JPG/JPEG) to PDF using Dompdf
+     * 
+     * @param string $imageData Binary image data
+     * @param string $extension Image extension (png, jpg, jpeg)
+     * @return string|null PDF content or null if conversion fails
+     */
+    private function convertImageToPdf($imageData, $extension)
+    {
+        try {
+            // Convert binary image data to base64 for embedding in HTML
+            $base64Image = base64_encode($imageData);
+            $mimeType = $extension === 'png' ? 'image/png' : 'image/jpeg';
+            
+            // Create HTML with embedded image - 4x6 inches label size
+            $html = '
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <style>
+                    @page {
+                        size: 4in 6in;
+                        margin: 0;
+                    }
+                    body {
+                        margin: 0;
+                        padding: 0;
+                    }
+                    .label-container {
+                        width: 4in;
+                        height: 6in;
+                        display: flex;
+                        justify-content: center;
+                        align-items: center;
+                    }
+                    .label-image {
+                        max-width: 100%;
+                        max-height: 100%;
+                        width: auto;
+                        height: auto;
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="label-container">
+                    <img class="label-image" src="data:' . $mimeType . ';base64,' . $base64Image . '" />
+                </div>
+            </body>
+            </html>';
+            
+            // Use Dompdf to convert HTML to PDF
+            $dompdf = new \Dompdf\Dompdf();
+            $dompdf->loadHtml($html);
+            $dompdf->setPaper([0, 0, 288, 432], 'portrait'); // 4x6 inches in points (72 points per inch)
+            $dompdf->render();
+            
+            $pdfContent = $dompdf->output();
+            
+            if ($pdfContent && strlen($pdfContent) > 0) {
+                Log::info('Image converted to PDF successfully', ['size' => strlen($pdfContent)]);
+                return $pdfContent;
+            }
+            
+            Log::warning('PDF conversion returned empty content');
+            return null;
+        } catch (Exception $e) {
+            Log::error('Image to PDF conversion error: ' . $e->getMessage(), [
+                'file' => $e->getFile(),
+                'line' => $e->getLine()
+            ]);
+            return null;
+        }
     }
 
     public function orderPrintMultiple($orderCodeIds)
