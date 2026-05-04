@@ -662,8 +662,9 @@
             });
         });
 
-        // Store blob URL reference to revoke it later
-        let lastBlobUrl = null;
+        // Store blob URLs by order code to prevent memory leak
+        const blobUrlMap = new Map();
+        const orderCode = '{{ $order->order_number }}';
 
         function previewPDF(file) {
             // const {
@@ -687,11 +688,14 @@
                 imgSrc = file
             }
 
-            // Revoke previous blob URL to prevent memory leak
-            if (lastBlobUrl && lastBlobUrl.startsWith('blob:')) {
-                URL.revokeObjectURL(lastBlobUrl);
+            // Revoke previous blob URL for this order to prevent memory leak
+            if (blobUrlMap.has(orderCode)) {
+                const previousBlobUrl = blobUrlMap.get(orderCode);
+                if (previousBlobUrl.startsWith('blob:')) {
+                    URL.revokeObjectURL(previousBlobUrl);
+                }
             }
-            lastBlobUrl = imgSrc;
+            blobUrlMap.set(orderCode, imgSrc);
 
             $("#preview-pdf").empty();
             let embed = "<embed src=" + imgSrc +
