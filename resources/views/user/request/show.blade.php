@@ -580,6 +580,9 @@
         $("#preview-barcode").append(embed);
     }
 
+    // Store blob URL reference to revoke it later
+    let lastBlobUrl = null;
+
     function previewPDF(file) {
         const { jsPDF } = window.jspdf;
         const splitFile = file.split('.');
@@ -598,7 +601,13 @@
             imgSrc = file
         }
 
-        $("#preview-barcode").find("embed").remove();
+        // Revoke previous blob URL to prevent memory leak
+        if (lastBlobUrl && lastBlobUrl.startsWith('blob:')) {
+            URL.revokeObjectURL(lastBlobUrl);
+        }
+        lastBlobUrl = imgSrc;
+
+        $("#preview-barcode").empty();
         let embed = "<embed src="+ imgSrc +" frameborder='0' width='100%' height='500px' type='application/pdf' class='preview-pdf'>"
         $("#preview-barcode").append(embed)
     }

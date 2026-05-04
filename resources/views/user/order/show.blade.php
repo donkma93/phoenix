@@ -662,6 +662,9 @@
             });
         });
 
+        // Store blob URL reference to revoke it later
+        let lastBlobUrl = null;
+
         function previewPDF(file) {
             // const {
             //     jsPDF
@@ -684,7 +687,13 @@
                 imgSrc = file
             }
 
-            $("#preview-pdf").find("embed").remove();
+            // Revoke previous blob URL to prevent memory leak
+            if (lastBlobUrl && lastBlobUrl.startsWith('blob:')) {
+                URL.revokeObjectURL(lastBlobUrl);
+            }
+            lastBlobUrl = imgSrc;
+
+            $("#preview-pdf").empty();
             let embed = "<embed src=" + imgSrc +
                 " frameborder='0' width='100%' height='500px' type='application/pdf' class='preview-pdf'>"
             $("#preview-pdf").append(embed)
