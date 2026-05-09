@@ -725,7 +725,8 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
                             'city' => $addressFrom->city ?? $warehouse['sender_city'],
                             'state' => $addressFrom->state ?? $warehouse['sender_province'],
                             'zip' => $addressFrom->zip ?? $warehouse['sender_zip'],
-                            'country' => $addressFrom->country ?? $warehouse['sender_country']
+                            'country' => $addressFrom->country ?? $warehouse['sender_country'],
+                            'email' => $addressFrom->email ?? 'warehouse@phoenix.local'
                         ),
                         "to_address" => array(
                             "object_purpose" => "PURCHASE",
@@ -1801,7 +1802,8 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
                         'city' => $addressFrom->city ?? ($warehouse ? $warehouse['sender_city'] : ''),
                         'state' => $addressFrom->state ?? ($warehouse ? $warehouse['sender_province'] : ''),
                         'zip' => $addressFrom->zip ?? ($warehouse ? $warehouse['sender_zip'] : ''),
-                        'country' => $addressFrom->country ?? ($warehouse ? $warehouse['sender_country'] : '')
+                        'country' => $addressFrom->country ?? ($warehouse ? $warehouse['sender_country'] : ''),
+                        'email' => $addressFrom->email ?? 'warehouse@phoenix.local'
                     ),
                     "to_address" => array(
                         "object_purpose" => "PURCHASE",
