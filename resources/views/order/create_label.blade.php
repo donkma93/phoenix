@@ -749,10 +749,6 @@
                                     <input class="btn btn-info btn-round create_label_normal" type="button"
                                         value="{{ __('Create Label') }}">
                                 </div>
-                                <!-- <div class="text-center text-sm-left ml-2">
-                                            <input class="btn btn-success btn-round create_label_g7" type="button"
-                                                value="{{ __('Buy labels via g7') }}">
-                                        </div> -->
                                 <div class="text-center text-sm-left ml-2">
                                     <input class="btn btn-primary btn-round create_label_myib" type="button"
                                         value="{{ __('Buy labels via Myib') }}">
@@ -852,22 +848,6 @@
 @push('scripts')
     <script>
         $(document).ready(function() {
-            $('.create_label_g7').on('click', function() {
-                let is_confirm = confirm('Are you sure you want to create a label?');
-
-                if (is_confirm) {
-                    let $this = $(this);
-                    $this.prop('disabled', true);
-                    setTimeout(function() {
-                        $this.prop('disabled', false);
-                    }, 10000)
-
-                    let url = "{{ route('staff.orders.labels.create.g7') }}";
-                    $('#create_label_form').prop('action', url);
-                    $('#create_label_form').submit();
-                }
-            })
-
             $('.create_label_myib').on('click', function() {
                 console.log('========================================');
                 console.log('🚀 [MYIB] Button clicked - Starting process');

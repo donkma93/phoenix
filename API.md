@@ -142,13 +142,15 @@ Prefix: /api/v1
 ## Webhooks (Public)
 
 - POST /api/webhook-shippo
+  - Secured by webhook token middleware
   - Response 200: { status: string }
 
-- POST /api/webhook-label-g7
-  - Secured by custom middleware
+- POST /api/myib-webhook
+  - Secured by webhook token middleware
   - Response 200: { status: string }
 
 - POST /api/webhook-17track
+  - Secured by webhook token middleware
   - Response 200: { status: string }
 
 ## Client (Public)

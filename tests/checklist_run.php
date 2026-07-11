@@ -139,7 +139,7 @@ check('C08', 'readLabelBinary supports URL + storage public MyIB paths', functio
     assert_true(strpos($m, 'public_path') !== false, 'no public_path resolve');
 });
 
-check('C09', 'storage:cleanup never deletes PNX_LABEL / g7 labels', function () {
+check('C09', 'storage:cleanup never deletes PNX_LABEL', function () {
     $src = read('app/Console/Commands/CleanupStorage.php');
     assert_true(strpos($src, 'cleanOrphanLabels') === false, 'orphan label cleanup still present');
     assert_true(strpos($src, 'labels-days') === false, 'labels-days option still present');
@@ -151,7 +151,7 @@ check('C09', 'storage:cleanup never deletes PNX_LABEL / g7 labels', function () 
 });
 
 check('C10', 'Protected path logic: PNX_LABEL protected, imports not', function () {
-    $fragments = ['uploads/PNX_LABEL', 'uploads\\PNX_LABEL', 'documents/g7'];
+    $fragments = ['uploads/PNX_LABEL', 'uploads\\PNX_LABEL'];
     $isProtected = function ($path) use ($fragments) {
         $n = str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $path);
         foreach ($fragments as $f) {

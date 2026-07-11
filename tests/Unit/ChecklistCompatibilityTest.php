@@ -170,8 +170,6 @@ class ChecklistCompatibilityTest extends TestCase
         $fragments = [
             'uploads' . DIRECTORY_SEPARATOR . 'PNX_LABEL',
             'uploads/PNX_LABEL',
-            'documents' . DIRECTORY_SEPARATOR . 'g7',
-            'documents/g7',
         ];
         $isProtected = function (string $path) use ($fragments): bool {
             $normalized = str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $path);
@@ -186,7 +184,6 @@ class ChecklistCompatibilityTest extends TestCase
 
         $this->assertTrue($isProtected('E:/phoenix/storage/app/public/uploads/PNX_LABEL/202511/x.pdf'));
         $this->assertTrue($isProtected('storage/app/public/uploads/PNX_LABEL/a.png'));
-        $this->assertTrue($isProtected('public/documents/g7/label.pdf'));
         $this->assertFalse($isProtected('public/imgs/orders/123_Shipping.xlsx'));
         $this->assertFalse($isProtected('public/tmp/C_123abc.pdf'));
         $this->assertFalse($isProtected('storage/debugbar/foo.json'));

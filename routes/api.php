@@ -6,7 +6,6 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\PackingListController;
 use App\Http\Controllers\Staff\StaffOrderController;
 use App\Http\Controllers\WebhookShippoController;
-use App\Http\Controllers\WebhookG7Controller;
 use App\Http\Controllers\Webhook17trackController;
 use App\Http\Controllers\WebhookMyibController;
 use App\Http\Controllers\User\UserOrderController;
@@ -90,10 +89,6 @@ Route::post('/webhook-shippo', [WebhookShippoController::class, 'handle_data'])
 
 Route::post('/myib-webhook', [WebhookMyibController::class, 'handleData'])
     ->name('webhook.myib')
-    ->middleware('webhooksecure');
-
-Route::post('/webhook-label-g7', [WebhookG7Controller::class, 'handleData'])
-    ->name('webhook.label.g7')
     ->middleware('webhooksecure');
 
 Route::post('/webhook-17track', [Webhook17trackController::class, 'handleData'])

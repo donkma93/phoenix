@@ -88,7 +88,7 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
         try {
             $import = new StaffOrdersImport($request['user_id']);
 
-            // Import from temp upload only — do not archive every xlsx under public/imgs/orders
+            // Import from temp upload only â€” do not archive every xlsx under public/imgs/orders
             Excel::import($import, $file);
 
             if (count($import->errors)) {
@@ -194,333 +194,6 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
     }
 
 
-    public function storeExcelG7($file, $request)
-    {
-        //DB::beginTransaction();
-        try {
-            $import = new StaffLabelsImport();
-
-            Excel::import($import, $file);
-
-            //$fileMove = $file->move('imgs' . DIRECTORY_SEPARATOR . Order::IMG_FOLDER, cleanName($file->getClientOriginalName()));
-
-            if (count($import->errors)) {
-                return [
-                    'isValid' => false,
-                    'message' => 'Validate failed',
-                    'errors' => $import->errors
-                ];
-            }
-
-            $now = Carbon::now();
-            $ordersError = [];
-            $ordersSkip = [];
-
-            foreach ($import->rows as $key => $row) {
-                $rs = DB::table('order_transactions')->where('order_id', $row['order_id'])->first();
-
-                if (!!$rs) {
-                    array_push($ordersSkip, $row['order_id']);
-                    continue;
-                }
-
-                $order = $this->createLabel($row['order_id'])['order'];
-
-                // Gọi API Login
-                $curl = curl_init();
-                curl_setopt_array($curl, array(
-                    CURLOPT_URL => 'https://g7logistics.com/agentapi/login',
-                    CURLOPT_RETURNTRANSFER => true,
-                    CURLOPT_ENCODING => '',
-                    CURLOPT_MAXREDIRS => 10,
-                    CURLOPT_TIMEOUT => 0,
-                    CURLOPT_FOLLOWLOCATION => true,
-                    CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
-                    CURLOPT_CUSTOMREQUEST => 'POST',
-                    CURLOPT_POSTFIELDS => '{
-                    "email": "' . config('app.g7_email') . '",
-                    "password": "' . config('app.g7_password') . '"
-                }',
-                    CURLOPT_HTTPHEADER => array(
-                        'Content-Type: application/json'
-                    ),
-                ));
-                $response = curl_exec($curl);
-                Log::info('IMPORT LABELS: ' . json_encode($response));
-
-                curl_close($curl);
-
-                $isLogin = (json_decode($response))->succeeded ?? false;
-
-                if ($isLogin === true) { // Nếu login thành công
-                    $token = (json_decode($response))->data->token;
-                    $data = $row;
-                    //dd($data);
-                    $data['receiver_company'] = $order['addressTo']['company'] ?? '';
-                    $data['receiver_name'] = $order['addressTo']['name'] ?? '';
-                    $data['receiver_street'] = $order['addressTo']['street1'] ?? '';
-                    $data['receiver_address1'] = $order['addressTo']['street2'] ?? '';
-                    $data['receiver_address2'] = $order['addressTo']['street3'] ?? '';
-                    $data['receiver_city'] = $order['addressTo']['city'] ?? '';
-                    $data['receiver_province'] = $order['addressTo']['state'] ?? '';
-                    $data['receiver_country'] = $order['addressTo']['country'] ?? '';
-                    $data['receiver_zip'] = $order['addressTo']['zip'] ?? '';
-                    $data['receiver_phone'] = $order['addressTo']['phone'] ?? '';
-                    $data['item_name'] = $order->item_name ?? ($order->orderProducts[0]->product->name ?? '');
-
-                    if (!isset($data['package_height']) || trim($data['package_height']) === '') {
-                        $data['package_height'] = $order->orderPackage->height;
-                    }
-
-                    if (!isset($data['package_length']) || trim($data['package_length']) === '') {
-                        $data['package_length'] = $order->orderPackage->length;
-                    }
-
-                    if (!isset($data['package_width']) || trim($data['package_width']) === '') {
-                        $data['package_width'] = $order->orderPackage->width;
-                    }
-
-                    if (!isset($data['package_weight']) || trim($data['package_weight']) === '') {
-                        $data['package_weight'] = $order->orderPackage->weight;
-                    }
-
-                    if (!isset($data['size_type']) || trim($data['size_type']) === '') {
-                        $data['size_type'] = $order->orderPackage->size_type;
-                    }
-
-                    if (!isset($data['weight_type']) || trim($data['weight_type']) === '') {
-                        $data['weight_type'] = $order->orderPackage->weight_type;
-                    }
-
-                    $orderDate = gmdate('Y-m-d\TH:i:s.u\Z');
-
-                    //Quy đổi kích thước sang cm và trọng lượng sang kg
-                    if ($data['size_type'] == 1) { // inch to cm
-                        $data['package_height_new'] = $data['package_height'] * 2.54;
-                        $data['package_length_new'] = $data['package_length'] * 2.54;
-                        $data['package_width_new'] = $data['package_width'] * 2.54;
-                    } else {
-                        $data['package_height_new'] = $data['package_height'] * 1;
-                        $data['package_length_new'] = $data['package_length'] * 1;
-                        $data['package_width_new'] = $data['package_width'] * 1;
-                    }
-
-                    if ($data['weight_type'] == 1) { // Lb to kg
-                        $data['package_weight_new'] = $data['package_weight'] * 0.45359237;
-                    } else { // Oz to kg
-                        $data['package_weight_new'] = $data['package_weight'] * 0.0283495231;
-                    }
-
-                    $curl = curl_init();
-
-                    $remarks = '';
-                    if (Auth::user()->email !== null && Auth::user()->email === 'kinhdoanh1@wce.vn') {
-                        $remarks = 'WCE';
-                    }
-
-                    $body_data = '{
-                      "shipmentId": "",
-                      "order": {
-                        "no": "",
-                        "orderDate": "' . $orderDate . '",
-                        "sender_companyName": "' . trim($data['shipping_company'], "' \"") . '",
-                        "sender_name": "' . trim($data['shipping_name'], "' \"") . '",
-                        "sender_givename": "",
-                        "sender_address1": "' . trim($data['shipping_street'], "' \"") . '",
-                        "sender_address2": "' . trim($data['shipping_address1'], "' \"") . '",
-                        "sender_address3": "' . trim($data['shipping_address2'], "' \"") . '",
-                        "sender_city": "' . trim($data['shipping_city'], "' \"") . '",
-                        "sender_district": "",
-                        "sender_country": "' . trim($data['shipping_country'], "' \"") . '",
-                        "sender_postCode": "' . trim($data['shipping_zip'], "' \"") . '",
-                        "sender_phone": "' . trim($data['shipping_phone'], "' \"") . '",
-                        "sender_email": "",
-                        "sender_state": "' . trim($data['shipping_province'], "' \"") . '",
-                        "consignee_companyName": "' . trim($data['receiver_company'], "' \"") . '",
-                        "consignee_name": "' . trim($data['receiver_name'], "' \"") . '",
-                        "consignee_givename": "",
-                        "consignee_address1": "' . trim($data['receiver_street'], "' \"") . '",
-                        "consignee_address2": "' . trim($data['receiver_address1'], "' \"") . '",
-                        "consignee_address3": "' . trim($data['receiver_address2'], "' \"") . '",
-                        "consignee_city": "' . trim($data['receiver_city'], "' \"") . '",
-                        "consignee_state": "' . trim($data['receiver_province'], "' \"") . '",
-                        "consignee_district": "",
-                        "consignee_country": "' . trim($data['receiver_country'], "' \"") . '",
-                        "consignee_postCode": "' . trim($data['receiver_zip'], "' \"") . '",
-                        "consignee_phone": "' . trim($data['receiver_phone'], "' \"") . '",
-                        "consignee_email": "",
-                        "packageDesc": "",
-                        "serviceId": 11,
-                        "kindOfGood": 0,
-                        "packages": [
-                          {
-                            "netWeight": ' . $data['package_weight_new'] . ',
-                            "height": ' . $data['package_height_new'] . ',
-                            "length": ' . $data['package_length_new'] . ',
-                            "width": ' . $data['package_width_new'] . '
-                          }
-                        ],
-                        "goods": [
-                          {
-                            "descriptionGood": "' . addslashes($data['item_name']) . '",
-                            "value": ' . rand(30, 50) . ',
-                            "curValId": "USD",
-                            "countryoforigin": "VN",
-                            "sku": "",
-                            "itemQuantity": 1,
-                            "hscode": "73269099",
-                            "packNo": 0,
-                            "netWeight": ' . $data['package_weight_new'] . '
-                          }
-                        ],
-                        "deliveryDate": "' . $orderDate . '",
-                        "deliveryTime": "",
-                        "remarks": "' . $remarks . '",
-                        "phoneContact": "",
-                        "bookingCode": "",
-                        "isValid": true,
-                        "notImport": true,
-                        "sMessage": "",
-                        "orderNo": "",
-                        "storeAddress": ""
-                      }
-                    }';
-
-                    curl_setopt_array($curl, array(
-                        CURLOPT_URL => 'https://g7logistics.com/agentapi/add-edit-order',
-                        CURLOPT_RETURNTRANSFER => true,
-                        CURLOPT_ENCODING => '',
-                        CURLOPT_MAXREDIRS => 10,
-                        CURLOPT_TIMEOUT => 0,
-                        CURLOPT_FOLLOWLOCATION => true,
-                        CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
-                        CURLOPT_CUSTOMREQUEST => 'POST',
-                        CURLOPT_POSTFIELDS => $body_data,
-                        CURLOPT_HTTPHEADER => array(
-                            'Content-Type: application/json',
-                            'Authorization: Bearer ' . $token
-                        ),
-                    ));
-
-                    $response = curl_exec($curl);
-                    Log::info('IMPORT LABELS: ' . json_encode($response));
-
-                    curl_close($curl);
-
-                    $response_status = json_decode($response)->succeeded ?? false;
-
-                    // Nếu tạo mã thành công thì sẽ cập nhật dữ liệu
-                    if ($response_status === true) {
-                        $shipmentId = json_decode($response)->data->shipmentId;
-                        // Gọi api đăng ký bill với G7
-                        $curl = curl_init();
-
-                        curl_setopt_array($curl, array(
-                            CURLOPT_URL => 'https://g7logistics.com/agentapi/send-order',
-                            CURLOPT_RETURNTRANSFER => true,
-                            CURLOPT_ENCODING => '',
-                            CURLOPT_MAXREDIRS => 10,
-                            CURLOPT_TIMEOUT => 0,
-                            CURLOPT_FOLLOWLOCATION => true,
-                            CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
-                            CURLOPT_CUSTOMREQUEST => 'POST',
-                            CURLOPT_POSTFIELDS => '["' . $shipmentId . '"]',
-                            CURLOPT_HTTPHEADER => array(
-                                'Content-Type: application/json',
-                                'Authorization: Bearer ' . $token
-                            ),
-                        ));
-
-                        $response = curl_exec($curl);
-                        Log::info('IMPORT LABELS: ' . json_encode($response));
-
-                        curl_close($curl);
-
-                        // Chuẩn bị data để cập nhật db
-                        $user_id = auth()->user()->id;
-                        $order_id = $data['order_id'];
-                        $shipping_name = $data['shipping_name'];
-                        $shipping_street = $data['shipping_street'];
-                        $shipping_address1 = $data['shipping_address1'] ?? '';
-                        $shipping_address2 = $data['shipping_address2'];
-                        $shipping_company = $data['shipping_company'];
-                        $shipping_city = $data['shipping_city'];
-                        $shipping_zip = $data['shipping_zip'];
-                        $shipping_province = $data['shipping_province'];
-                        $shipping_country = $data['shipping_country'];
-                        $shipping_phone = $data['shipping_phone'];
-                        $amount = 0;
-                        $currency = 'VND';
-                        $label_url = ''; //$file_order_path
-                        $tracking_provider = $shipmentId;
-                        $tracking_number = '';
-                        $shipping_carrier = 'PNX';
-                        $shipping_provider = 'G7';
-                        $width = $data['package_width'];
-                        $height = $data['package_height'];
-                        $length = $data['package_length'];
-                        $weight = $data['package_weight'];
-                        $size_type = $data['size_type'];
-                        $weight_type = $data['weight_type'];
-
-
-                        // { CALL phoenix.label_create_input(:p_user_id,:p_order_id,:p_shipping_name,:p_shipping_street,:p_shipping_address1,:p_shipping_address2,:p_shipping_company,:p_shipping_city,:p_shipping_zip,:p_shipping_province,:p_shipping_country,:p_shipping_phone,:p_amount,:p_currency,:p_label_url,:p_tracking_number,:p_shipping_carrier,:p_shipping_provider) }
-                        DB::select('call label_create_input(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [
-                            $user_id,
-                            $order_id,
-                            $shipping_name,
-                            $shipping_street,
-                            $shipping_address1,
-                            $shipping_address2,
-                            $shipping_company,
-                            $shipping_city,
-                            $shipping_zip,
-                            $shipping_province,
-                            $shipping_country,
-                            $shipping_phone,
-                            $amount,
-                            $currency,
-                            $label_url,
-                            $tracking_provider,
-                            $tracking_number,
-                            $shipping_carrier,
-                            $shipping_provider,
-                            $width,
-                            $height,
-                            $length,
-                            $weight,
-                            $size_type,
-                            $weight_type,
-                            null
-                        ]);
-                    } else {
-                        array_push($ordersError, $row['order_id']);
-                    }
-                } else {
-                    Log::error('IMPORT LABELS: Login G7 failed.');
-                    return [
-                        'isValid' => false,
-                        'message' => 'Login G7 failed.'
-                    ];
-                }
-            }
-
-            //DB::commit();
-            if (count($ordersSkip) > 0) {
-                Log::info('IMPORT LABELS: ORDERS SKIP ' . implode(', ', $ordersSkip));
-            }
-
-            return [
-                'isValid' => true,
-                'rawData' => $import->rows,
-                'ordersError' => $ordersError,
-            ];
-        } catch (Exception $e) {
-            //DB::rollback();
-            Log::error($e);
-            throw $e;
-        }
-    }
 
 
     public function storeExcelShippo($file, $request)
@@ -845,10 +518,10 @@ $i++;
                 try {
                     $order = $this->createLabel($row['order_id'])['order'];
 
-                    // Excel có thông tin người gửi (sender) - từ $row
-                    // Order có thông tin người nhận (receiver) - từ $order->addressTo
+                    // Excel cÃ³ thÃ´ng tin ngÆ°á»i gá»­i (sender) - tá»« $row
+                    // Order cÃ³ thÃ´ng tin ngÆ°á»i nháº­n (receiver) - tá»« $order->addressTo
 
-                    // Tạo addressFrom từ Excel data (người gửi)
+                    // Táº¡o addressFrom tá»« Excel data (ngÆ°á»i gá»­i)
                     $street = $row['shipping_street'] ?? '';
                     if (!empty($row['shipping_address1'])) {
                         $street .= ',' . $row['shipping_address1'];
@@ -870,7 +543,7 @@ $i++;
                         'phone' => $row['shipping_phone'] ?? null,
                     ];
 
-                    // Validate và tạo addressFrom nếu chưa có
+                    // Validate vÃ  táº¡o addressFrom náº¿u chÆ°a cÃ³
                     if (!$order->addressFrom) {
                         $dataFrom = Order::validateAddress($addressFrom);
                         if (count($dataFrom['errorMsg'])) {
@@ -889,10 +562,10 @@ $i++;
                         $order->save();
                     }
 
-                    // Reload order với addressFrom và addressTo
+                    // Reload order vá»›i addressFrom vÃ  addressTo
                     $order = Order::with(['orderPackage', 'addressFrom', 'addressTo'])->findOrFail($row['order_id']);
 
-                    // Update package info từ Excel nếu có
+                    // Update package info tá»« Excel náº¿u cÃ³
                     if (isset($row['package_width']) || isset($row['package_height']) || 
                         isset($row['package_length']) || isset($row['package_weight'])) {
                         $packageData = [];
@@ -1029,8 +702,8 @@ $i++;
 
         $products = Product::where('user_id', $id)->get();
 
-        // Lấy bảng giá
-        // Từ id lấy ra partner_code trong bảng users, sau đó từ partner_code lấy ra id_price_table trong bảng partners
+        // Láº¥y báº£ng giÃ¡
+        // Tá»« id láº¥y ra partner_code trong báº£ng users, sau Ä‘Ã³ tá»« partner_code láº¥y ra id_price_table trong báº£ng partners
         $id_price_table = null;
         $partner_code = DB::table('users')->where('id', $id)->value('partner_code');
 
@@ -1944,7 +1617,7 @@ $i++;
             // Load order with necessary relationships
             $order = Order::with(['user', 'orderProducts.product'])->findOrFail($orderId);
 
-            // Avoid json_encode(full Eloquent model) — can dump huge content/casts into logs & memory
+            // Avoid json_encode(full Eloquent model) â€” can dump huge content/casts into logs & memory
             
             // Get order package (already updated in storeLabel)
             $orderPackage = OrderPackage::where('order_id', $order->id)->first();
@@ -2147,7 +1820,7 @@ $i++;
 
             DB::commit();
 
-            // Check nếu người tạo order có webhook thì xử lý dữ liệu sau đó gửi vào webhook
+            // Check náº¿u ngÆ°á»i táº¡o order cÃ³ webhook thÃ¬ xá»­ lÃ½ dá»¯ liá»‡u sau Ä‘Ã³ gá»­i vÃ o webhook
             $webhook_url = DB::table('users as u')
                 ->where('u.id', $order->user_id)
                 ->where('u.deleted_at', null)

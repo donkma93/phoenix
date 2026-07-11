@@ -28,8 +28,6 @@ class CleanupStorage extends Command
     protected $protectedPathFragments = [
         'uploads' . DIRECTORY_SEPARATOR . 'PNX_LABEL',
         'uploads/PNX_LABEL',
-        'documents' . DIRECTORY_SEPARATOR . 'g7',
-        'documents/g7',
     ];
 
     protected $signature = 'storage:cleanup
@@ -48,7 +46,7 @@ class CleanupStorage extends Command
         $debugbarHours = max(0, (int) $this->option('debugbar-hours'));
 
         $this->info(($dryRun ? '[DRY-RUN] ' : '') . 'Starting safe storage cleanup...');
-        $this->warn('Protected: MyIB label PDFs (uploads/PNX_LABEL) and G7 labels are NEVER deleted by this command.');
+        $this->warn('Protected: MyIB label PDFs (uploads/PNX_LABEL) are NEVER deleted by this command.');
 
         $stats = [
             'tmp' => $this->cleanDirectoryByAge(public_path('tmp'), $tmpHours / 24, $dryRun),
