@@ -1505,6 +1505,8 @@ $data['extension'] = $extension;
                             'zip' => $addFrom->zip ?? '',
                             'state' => $addFrom->state ?? '',
                             'city' => $addFrom->city ?? '',
+                            'email' => "thuynguyen@gmail.com",
+                            
                         ],
                         'address_to' => [
                             'country' => $addTo->country ?? '',

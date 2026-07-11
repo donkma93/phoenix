@@ -1,10 +1,11 @@
 <?php
 
-namespace App\Imports\Staff;
+namespace App\Imports\User;
 
 use App\Models\Order;
 use App\Models\OrderAddress;
 use App\Models\Product;
+use App\Models\User;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Maatwebsite\Excel\Concerns\ToCollection;
@@ -13,18 +14,12 @@ use Maatwebsite\Excel\Concerns\SkipsEmptyRows;
 
 use Illuminate\Support\Facades\Validator;
 
-class StaffOrdersImport implements ToCollection, WithHeadingRow
+class UserOrdersImport implements ToCollection, WithHeadingRow
 {
     public $rows = [];
     public $addresses = [];
     public $errors = [];
     public $products = [];
-    public $userId;
-
-    public function __construct($id)
-    {
-        $this->userId = $id;
-    }
 
     /**
     * @param Collection $collection
@@ -33,9 +28,9 @@ class StaffOrdersImport implements ToCollection, WithHeadingRow
     {
         foreach ($collection as $key => $rowCollection) {
             if($rowCollection->filter()->isNotEmpty()){
+                // TODO check condition validate
                 $row = $rowCollection->toArray();
 
-                // TODO check condition validate
                 $validator = Validator::make($row, [
                     'created_at' => 'nullable|date',
                     'order_number' => 'nullable|max:255',
@@ -49,16 +44,19 @@ class StaffOrdersImport implements ToCollection, WithHeadingRow
                     'shipping_zip' => 'required|max:20',
                     'shipping_province' => 'required|max:255',
                     'shipping_country' => 'required|max:255',
+                    'shipping_email' => 'nullable|email|max:255',
                     // 'shipping_phone' => 'nullable|max:255',
 
                     'lineitem_quantity' => 'required|integer|min:1',
-                    'lineitem_name' => 'required|exists:products,name,deleted_at,NULL,user_id,' . $this->userId,
+                    'lineitem_name' => 'required|max:255',
                     'lineitem_price' => 'nullable|numeric|min:0|not_in:0',
                     'lineitem_compare_at_price' => 'nullable|numeric|min:0|not_in:0',
                     'lineitem_sku' => 'required|max:255',
                     'lineitem_requires_shipping' => 'nullable|integer|min:0',
                     'lineitem_taxable' => 'nullable|numeric|min:0|not_in:0',
                     'lineitem_fulfillment_status' => 'nullable|max:255',
+
+                    // 'lineitem_discount' => '',
                 ]);
 
                 if ($validator->fails()) {
@@ -71,7 +69,7 @@ class StaffOrdersImport implements ToCollection, WithHeadingRow
                     $street .= ',' . $row['shipping_address1'];
                 }
 
-                if ($row['shipping_address2']) {
+                if (isset($row['shipping_address2']) && !empty($row['shipping_address2'])) {
                     $street .= ',' . $row['shipping_address2'];
                 }
 
@@ -86,6 +84,7 @@ class StaffOrdersImport implements ToCollection, WithHeadingRow
                     'state' => $row['shipping_province'],
                     'zip' => $row['shipping_zip'],
                     'country' => $row['shipping_country'],
+                    'email' => $row['shipping_email'] ?? (Auth::user()->email ?? User::find(Auth::id())?->email ?? config('mail.from.address') ?? 'warehouse@phoenix.local'),
                     'phone' => $row['shipping_phone'] ?? null,
                 ];
 
@@ -97,13 +96,13 @@ class StaffOrdersImport implements ToCollection, WithHeadingRow
 
                 $address['street1'] = $row['shipping_street'];
                 $address['object_id'] = $validateAddress['value']['object_id'];
-                $address['user_id'] = $this->userId;
+                $address['user_id'] = Auth::id();
                 $this->addresses[$key] = $address;
 
                 if (!array_key_exists($row['lineitem_name'], $this->products)) {
                     $product = Product::with('packageGroupWithTrashed')
                         ->where('name', $row['lineitem_name'])
-                        ->where('user_id', $this->userId)
+                        ->where('user_id', Auth::id())
                         ->first();
 
                     $this->products[$row['lineitem_name']] = $product;

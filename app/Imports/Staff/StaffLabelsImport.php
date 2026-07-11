@@ -37,7 +37,7 @@ class StaffLabelsImport implements ToCollection, WithHeadingRow
 
                     // TODO check condition validate
                     $validator = Validator::make($row, [
-                        'order_id' => 'required|integer',
+                        'order_id' => 'required',
                         'shipping_name' => 'required|string',
                         'shipping_country' => 'required|alpha_dash',
                         'shipping_province' => 'required|alpha_dash',

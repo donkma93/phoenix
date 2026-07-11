@@ -208,7 +208,7 @@ class Order extends Model
             "zip" => $this->shipping_zip,
             "country" => $this->shipping_country,
             "phone" => $this->shipping_phone,
-            // "email" => ''
+            "email" => ($this->user ? $this->user->email : config('mail.from.address')),
         ];
     }
 

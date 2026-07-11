@@ -522,6 +522,7 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
 
     public function storeExcelShippo($file, $request)
     {
+       
         //DB::beginTransaction();
         try {
             $import = new StaffLabelsImport();
@@ -540,15 +541,17 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
 
             $now = Carbon::now();
             $ordersSkip = [];
-
+            $i = 0;
             foreach ($import->rows as $key => $row) {
                 $rs = DB::table('order_transactions')->where('order_id', $row['order_id'])->first();
+               
 
                 if (!!$rs) {
                     array_push($ordersSkip, $row['order_id']);
                     continue;
                 }
 
+$i++;
                 $data = $row;
                 $orderId = $row['order_id'];
                 $orderInput = $this->createLabel($orderId)['order'];
@@ -632,7 +635,7 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
                     'zip' => $data['shipping_zip'],
                     'country' => $data['shipping_country'],
                     'phone' => $data['shipping_phone'],
-                    //'email' => 'warehouse_test@gmail.com',
+                    'email' => 'warehouse_test@gmail.com',
                 ];
 
                 $dataFrom = Order::validateAddress($addressFrom);
@@ -660,7 +663,7 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
                     'parcels' => [$parcel],
                     'async' => false,
                 ]);
-
+                
                 if ($shipment['status'] != "SUCCESS") {
                     $errorMsg = array_map(function ($error) {
                         return $error->text;
@@ -726,7 +729,7 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
                             'state' => $addressFrom->state ?? $warehouse['sender_province'],
                             'zip' => $addressFrom->zip ?? $warehouse['sender_zip'],
                             'country' => $addressFrom->country ?? $warehouse['sender_country'],
-                            'email' => $addressFrom->email ?? 'warehouse@phoenix.local'
+                            'email' =>  'warehouse@phoenix.local',
                         ),
                         "to_address" => array(
                             "object_purpose" => "PURCHASE",
