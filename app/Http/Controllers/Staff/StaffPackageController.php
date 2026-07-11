@@ -50,7 +50,7 @@ class StaffPackageController extends StaffBaseController
 
             return view('staff.package.outbound', [
                 'packagesRes' => $packagesRes,
-                'users' => $this->users,
+                'users' => $this->getUsers(),
             ]);
         } catch(Exception $e) {
             Log::error($e);

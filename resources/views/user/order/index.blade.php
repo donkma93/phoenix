@@ -307,9 +307,7 @@
                             </table>
                             </form>
                         </div>
-                        {{-- <div class="d-flex justify-content-center justify-content-md-end amt-16">
-                            {{ $orders->appends(request()->all())->links() }}
-                        </div> --}}
+                        {{-- Client DataTable handles paging (same as original flow) --}}
                     @else
                         <div class="text-center">{{ __('No data.') }}</div>
                     @endif
@@ -384,12 +382,10 @@
             });
 
 
-            // Datatable
+            // Datatable (original client-side paging)
             $('.datatable').DataTable({
                 "pagingType": "full_numbers",
                 "lengthMenu": [
-                    // [10, 25, 50, -1],
-                    // [10, 25, 50, "All"]
                     [50, 25, 10],
                     [50, 25, 10]
                 ],
@@ -399,7 +395,6 @@
                     searchPlaceholder: "Search records",
                 },
                 "aaSorting": [],
-                // "ordering": false,
             });
 
 

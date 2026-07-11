@@ -37,7 +37,8 @@ return [
     'channels' => [
         'stack' => [
             'driver' => 'stack',
-            'channels' => ['single'],
+            // daily rotates + auto-deletes old logs (prevents unbounded laravel.log growth)
+            'channels' => ['daily'],
             'ignore_exceptions' => false,
         ],
 
@@ -50,7 +51,7 @@ return [
         'daily' => [
             'driver' => 'daily',
             'path' => storage_path('logs/laravel.log'),
-            'level' => env('LOG_LEVEL', 'debug'),
+            'level' => env('LOG_LEVEL', 'warning'),
             'days' => 14,
         ],
 

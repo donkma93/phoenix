@@ -88,9 +88,8 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
         try {
             $import = new StaffOrdersImport($request['user_id']);
 
+            // Import from temp upload only — do not archive every xlsx under public/imgs/orders
             Excel::import($import, $file);
-
-            $fileMove = $file->move('imgs' . DIRECTORY_SEPARATOR . Order::IMG_FOLDER, cleanName($file->getClientOriginalName()));
 
             if (count($import->errors)) {
                 return [
@@ -128,8 +127,9 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
                         'state' => Order::STATE_NONE,
                         'user_id' => $request['user_id'],
 
-                        'content' => $row,
-                        'file' => $fileMove,
+                        // Avoid bloating DB (full Excel row JSON) and disk (permanent import copies)
+                        'content' => null,
+                        'file' => null,
                     ]);
 
                     if (isset($row['order_number'])) {
@@ -180,9 +180,12 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
 
             DB::commit();
 
+            $import->rows = [];
+            $import->addresses = [];
+            $import->products = [];
+
             return [
                 'isValid' => true,
-                'rawData' => $import->rows,
             ];
         } catch (Exception $e) {
             DB::rollback();
@@ -1168,7 +1171,14 @@ $i++;
 
     public function list($request)
     {
-        $orders = Order::with(['orderProducts.product', 'orderPackage', 'orderTransaction', 'addressFrom', 'addressTo', 'orderRates'])
+        // Keep list lean: skip orderRates (heavy) and full User models.
+        $orders = Order::with(['orderProducts.product', 'orderPackage', 'orderTransaction', 'addressFrom', 'addressTo'])
+            ->select([
+                'id', 'order_code', 'order_number', 'status', 'payment', 'fulfillment',
+                'picking_status', 'state', 'user_id', 'partner_code',
+                'order_address_from_id', 'order_address_to_id',
+                'created_at', 'updated_at',
+            ])
             ->has('user');
 
         if (isset($request['email'])) {
@@ -1192,13 +1202,12 @@ $i++;
         if (isset($request['picking_status'])) {
             $orders = $orders->where('picking_status', $request['picking_status']);
         }
-        if (isset($request['bill_status']) && $request['bill_status'] != config('app.tracking_status_all')) { // Tận dụng trường picking_status để lưu bill_status
+        if (isset($request['bill_status']) && $request['bill_status'] != config('app.tracking_status_all')) {
             $orders = $orders->where('picking_status', $request['bill_status']);
         }
         if (isset($request['fulfillment'])) {
             $orders = $orders->where('fulfillment', $request['fulfillment']);
         }
-
 
         if (isset($request['order_number'])) {
             $orders = $orders->where('order_number', $request['order_number']);
@@ -1206,7 +1215,6 @@ $i++;
         if (isset($request['order_code'])) {
             $orders = $orders->where('order_code', $request['order_code']);
         }
-
 
         if (isset($request['date_from'])) {
             $orders = $orders->where('created_at', '>=', date('Y-m-d 00:00:00', strtotime($request['date_from'])));
@@ -1217,16 +1225,216 @@ $i++;
         }
 
         $orders = $orders->orderByDesc('updated_at')
-            ->paginate(100);
+            ->paginate(25);
 
         $emails = User::where('role', User::ROLE_USER)->pluck('email')->toArray();
-        $users = User::where('role', User::ROLE_USER)->get();
 
         return [
             'orders' => $orders,
             'oldInput' => $request,
             'emails' => $emails,
-            'users' => $users
+            'users' => [],
+        ];
+    }
+
+    /**
+     * Build base query for staff order list (matches order_list_staff columns).
+     */
+    protected function staffOrderListBaseQuery($dateFrom, $dateTo, $orderStatus = 99)
+    {
+        $from = date('Y-m-d 00:00:00', strtotime($dateFrom));
+        $toExclusive = date('Y-m-d 00:00:00', strtotime($dateTo . ' +1 day'));
+
+        $query = DB::table('orders as odr')
+            ->join('order_package as pkg', 'odr.id', '=', 'pkg.order_id')
+            ->join('order_addresses as addr', 'addr.id', '=', 'odr.order_address_to_id')
+            ->leftJoin('order_product as odr_prod', 'odr.id', '=', 'odr_prod.order_id')
+            ->leftJoin('order_transactions as odr_tran', 'odr.id', '=', 'odr_tran.order_id')
+            ->leftJoin('order_rates as odr_rate', 'odr_tran.order_rate_id', '=', 'odr_rate.id')
+            ->leftJoin('users', 'users.id', '=', 'odr.user_id')
+            ->whereNull('odr.deleted_at')
+            ->where('odr.created_at', '>=', $from)
+            ->where('odr.created_at', '<', $toExclusive);
+
+        if ((int) $orderStatus !== 99) {
+            $query->where('odr.picking_status', (int) $orderStatus);
+        }
+
+        return $query;
+    }
+
+    /**
+     * Apply free-text search (comma-separated OR terms) at SQL level.
+     */
+    protected function applyStaffOrderSearch($query, $searchValue)
+    {
+        $searchValue = trim((string) $searchValue);
+        if ($searchValue === '') {
+            return $query;
+        }
+
+        $terms = array_values(array_filter(array_map('trim', explode(',', $searchValue)), function ($v) {
+            return $v !== '';
+        }));
+        if (count($terms) === 0) {
+            $terms = [$searchValue];
+        }
+
+        return $query->where(function ($outer) use ($terms) {
+            foreach ($terms as $term) {
+                $like = '%' . str_replace(['%', '_'], ['\\%', '\\_'], $term) . '%';
+                $outer->orWhere(function ($q) use ($like) {
+                    $q->where('odr.order_code', 'like', $like)
+                        ->orWhere('odr.order_number', 'like', $like)
+                        ->orWhere('users.email', 'like', $like)
+                        ->orWhere('odr.partner_code', 'like', $like)
+                        ->orWhere('users.partner_code', 'like', $like)
+                        ->orWhere('addr.name', 'like', $like)
+                        ->orWhere('addr.street1', 'like', $like)
+                        ->orWhere('addr.city', 'like', $like)
+                        ->orWhere('addr.zip', 'like', $like)
+                        ->orWhere('odr_tran.tracking_number', 'like', $like)
+                        ->orWhere('odr_rate.provider', 'like', $like);
+                });
+            }
+        });
+    }
+
+    /**
+     * Status badge counts for staff order list (lightweight GROUP BY).
+     */
+    public function getOrderStatusCounts($dateFrom, $dateTo)
+    {
+        $from = date('Y-m-d 00:00:00', strtotime($dateFrom));
+        $toExclusive = date('Y-m-d 00:00:00', strtotime($dateTo . ' +1 day'));
+
+        $rows = DB::table('orders as odr')
+            ->whereNull('odr.deleted_at')
+            ->where('odr.created_at', '>=', $from)
+            ->where('odr.created_at', '<', $toExclusive)
+            ->select('odr.picking_status', DB::raw('COUNT(*) as count'))
+            ->groupBy('odr.picking_status')
+            ->get();
+
+        $countStatus = [];
+        foreach ($rows as $row) {
+            $countStatus[$row->picking_status] = $row->count;
+        }
+
+        return $countStatus;
+    }
+
+    /**
+     * Cheap existence check for empty-state UI.
+     */
+    public function hasOrdersInRange($dateFrom, $dateTo, $orderStatus = 99)
+    {
+        $query = $this->staffOrderListBaseQuery($dateFrom, $dateTo, $orderStatus);
+
+        return $query->limit(1)->exists();
+    }
+
+    /**
+     * Server-side DataTables: SQL pagination only (max $length rows in memory).
+     * Uses a two-step query so order_product joins cannot inflate page size.
+     */
+    public function listForDataTable($dateFrom, $dateTo, $orderStatus, $searchValue, $start, $length)
+    {
+        $base = $this->staffOrderListBaseQuery($dateFrom, $dateTo, $orderStatus);
+
+        // Distinct order count (order_product join can multiply rows)
+        $recordsTotal = (int) (clone $base)->count(DB::raw('DISTINCT odr.id'));
+
+        $filtered = $this->applyStaffOrderSearch(clone $base, $searchValue);
+        $recordsFiltered = ($searchValue !== null && trim((string) $searchValue) !== '')
+            ? (int) (clone $filtered)->count(DB::raw('DISTINCT odr.id'))
+            : $recordsTotal;
+
+        // Step 1: page of distinct order IDs only
+        $orderIds = (clone $filtered)
+            ->select('odr.id', 'odr.created_at')
+            ->groupBy('odr.id', 'odr.created_at')
+            ->orderByDesc('odr.created_at')
+            ->offset(max(0, (int) $start))
+            ->limit(max(1, (int) $length))
+            ->pluck('odr.id')
+            ->all();
+
+        if (count($orderIds) === 0) {
+            return [
+                'recordsTotal' => $recordsTotal,
+                'recordsFiltered' => $recordsFiltered,
+                'rows' => collect(),
+            ];
+        }
+
+        $itemSub = '(SELECT GROUP_CONCAT(DISTINCT name ORDER BY name ASC SEPARATOR \';\') '
+            . 'FROM products WHERE id IN (SELECT product_id FROM order_product WHERE order_product.order_id = odr.id))';
+        $pklSub = '(SELECT COUNT(*) FROM order_journey '
+            . 'LEFT JOIN packing_list ON packing_list.id = order_journey.id_packing_list '
+            . 'WHERE order_journey.order_id = odr.id AND order_journey.id_packing_list IS NOT NULL '
+            . 'AND packing_list.status = 10)';
+
+        // Step 2: full row data for those IDs only (one row per order via groupBy)
+        $rows = DB::table('orders as odr')
+            ->join('order_package as pkg', 'odr.id', '=', 'pkg.order_id')
+            ->join('order_addresses as addr', 'addr.id', '=', 'odr.order_address_to_id')
+            ->leftJoin('order_product as odr_prod', 'odr.id', '=', 'odr_prod.order_id')
+            ->leftJoin('order_transactions as odr_tran', 'odr.id', '=', 'odr_tran.order_id')
+            ->leftJoin('order_rates as odr_rate', 'odr_tran.order_rate_id', '=', 'odr_rate.id')
+            ->leftJoin('users', 'users.id', '=', 'odr.user_id')
+            ->whereIn('odr.id', $orderIds)
+            ->select([
+                'odr.id',
+                'odr.order_code',
+                'odr.picking_status',
+                'odr.order_number',
+                DB::raw('MAX(odr_rate.amount) as amount'),
+                DB::raw('MAX(odr_tran.tracking_number) as tracking_number'),
+                DB::raw('MAX(odr_tran.label_url) as label_url'),
+                DB::raw('MAX(odr_rate.provider) as provider'),
+                'odr.partner_code',
+                'addr.zip',
+                'addr.name',
+                DB::raw("CONCAT(addr.street1, ', ', addr.city, ',', addr.state, ',', addr.country) as addr"),
+                DB::raw('MAX(pkg.weight) as weight'),
+                DB::raw('MAX(pkg.width) as width'),
+                DB::raw('MAX(pkg.height) as height'),
+                DB::raw('MAX(pkg.length) as length'),
+                DB::raw('MAX(pkg.weight_type) as weight_type'),
+                DB::raw('MAX(pkg.size_type) as size_type'),
+                DB::raw($itemSub . ' as item'),
+                DB::raw('MAX(odr_prod.quantity) as quantity'),
+                'odr.created_at',
+                DB::raw('MAX(odr_tran.created_at) as transactions_created_at'),
+                DB::raw('MAX(odr_tran.id) as transactions_id'),
+                DB::raw('MAX(odr_rate.id) as odr_rate_id'),
+                'odr.order_address_to_id',
+                DB::raw('MAX(users.email) as user_email'),
+                DB::raw($pklSub . ' as count_pkl'),
+            ])
+            ->groupBy(
+                'odr.id',
+                'odr.order_code',
+                'odr.picking_status',
+                'odr.order_number',
+                'odr.partner_code',
+                'addr.zip',
+                'addr.name',
+                'addr.street1',
+                'addr.city',
+                'addr.state',
+                'addr.country',
+                'odr.created_at',
+                'odr.order_address_to_id'
+            )
+            ->orderByDesc('odr.created_at')
+            ->get();
+
+        return [
+            'recordsTotal' => $recordsTotal,
+            'recordsFiltered' => $recordsFiltered,
+            'rows' => $rows,
         ];
     }
 
@@ -1498,23 +1706,21 @@ $i++;
 
     public function getOrderPackageApi($request)
     {
-        $orderId = $request['order_id'];
-        $order = Order::where('order_code', $orderId)->first();
-        if (!isset($order)) {
+        // Accept numeric id or order_code (same as createLabelPdaApi)
+        $orderKey = $request['order_id'] ?? $request['order_code'] ?? null;
+        $order = \App\Support\ApiAccess::resolveOrder($orderKey);
+        if (!$order) {
             return [
                 'message_code' => 'NOT_FOUND',
-                'message_text' => [
-                    'Not found'
-                ]
+                'message_text' => ['Not found'],
             ];
         }
+
         $orderPackage = OrderPackage::where('order_id', $order->id)->first();
         if (!$orderPackage) {
             return [
                 'message_code' => 'NOT_FOUND',
-                'message_text' => [
-                    'Not found'
-                ]
+                'message_text' => ['Not found'],
             ];
         }
 
@@ -1522,15 +1728,17 @@ $i++;
         if ($orderTransaction) {
             $orderPackage['label_print_url'] = $orderTransaction->label_url;
             $orderPackage['tracking_code'] = $orderTransaction->tracking_number;
-            $orderPackage['brand_delivery'] = $orderTransaction->orderRate->provider;
+            // Null-safe: transaction may exist without rate
+            $orderPackage['brand_delivery'] = optional($orderTransaction->orderRate)->provider;
         }
-        $orderPackage['size_type'] = OrderPackage::$sizeName[$orderPackage->size_type];
-        $orderPackage['weight_type'] = OrderPackage::$weightName[$orderPackage->weight_type];
-        // $orderPackage['weight'] = number_format((float)$orderPackage->weight,1, '.', '');
+        $orderPackage['size_type'] = OrderPackage::$sizeName[$orderPackage->size_type] ?? $orderPackage->size_type;
+        $orderPackage['weight_type'] = OrderPackage::$weightName[$orderPackage->weight_type] ?? $orderPackage->weight_type;
+        $orderPackage['order_id'] = $order->id;
+        $orderPackage['order_code'] = $order->order_code;
 
         return [
             'message_code' => 'SUCCESS',
-            'package' => $orderPackage
+            'package' => $orderPackage,
         ];
     }
 
@@ -1549,23 +1757,32 @@ $i++;
 
             // type B: warehouse destination
             $warehouse = Warehouse::where('type', 'B')->first();
-            $orderId = $request['order_id'];
-            // $order = Order::doesntHave('orderTransaction')->findOrFail($orderId);
-            $order = Order::findOrFail($orderId);
+            // Accept numeric id or order_code (aligned with getOrderPackageApi)
+            $orderKey = $request['order_id'] ?? $request['order_code'] ?? null;
+            $order = \App\Support\ApiAccess::resolveOrder($orderKey);
+            if (!$order) {
+                DB::rollBack();
+                return [
+                    'message_code' => 'NOT_FOUND',
+                    'message_text' => 'Order not found',
+                    'errorMsg' => ['Order not found'],
+                ];
+            }
+            $orderId = $order->id;
 
             // check transaction, return existing one
 
             $orderTransactionCheck = OrderTransaction::with(['orderRate'])->where('order_id', $orderId)->first();
 
             if ($orderTransactionCheck) {
-
+                DB::commit();
                 Log::info("NEW PRINT -- " . $orderTransactionCheck->tracking_number . " ORDER:" . $orderId);
 
                 return [
                     'message_code' => 'SUCCESS',
                     'label_print_url' => $orderTransactionCheck->label_url,
                     'tracking_code' => $orderTransactionCheck->tracking_number,
-                    'brand_delivery' => $orderTransactionCheck->orderRate->provider,
+                    'brand_delivery' => optional($orderTransactionCheck->orderRate)->provider,
                     'errorMsg' => []
                 ];
             }
@@ -1727,9 +1944,7 @@ $i++;
             // Load order with necessary relationships
             $order = Order::with(['user', 'orderProducts.product'])->findOrFail($orderId);
 
-            Log::info('Order:: ' . json_encode($order));
-            
-            Log::info('Order loaded', ['order_id' => $order->id, 'order_number' => $order->order_number]);
+            // Avoid json_encode(full Eloquent model) — can dump huge content/casts into logs & memory
             
             // Get order package (already updated in storeLabel)
             $orderPackage = OrderPackage::where('order_id', $order->id)->first();
@@ -3299,38 +3514,155 @@ $i++;
         }
     }
 
+    /**
+     * Merge labels for print. Accepts order IDs and/or order_codes (forms send either).
+     * Returns merged PDF path or null. Temp per-label files are cleaned; output is kept for download.
+     */
     public function orderPrintMultiple($orderCodeIds)
     {
-
-        $files = [];
-        $outFile = public_path() . '/tmp/' . 'C_' . Carbon::now()->timestamp . Str::random(8) . '.pdf';
-
-        Log::info("::count::" . json_encode($orderCodeIds));
-        $orderTransactions = OrderTransaction::whereIn('order_id', $orderCodeIds)->get();
-
-        Log::info("::count::" . count($orderTransactions));
-
-        if (count($orderTransactions) == 0) {
-            Log::info("::count::" . count($orderTransactions));
-            return;
+        $tmpDir = public_path('tmp');
+        if (!is_dir($tmpDir)) {
+            @mkdir($tmpDir, 0755, true);
         }
 
-        Log::info("::orderTransactions::" . json_encode($orderTransactions));
-        $pdf = PDFMerger::init();
+        $keys = is_array($orderCodeIds) ? $orderCodeIds : (array) $orderCodeIds;
+        $keys = array_values(array_filter(array_map(function ($v) {
+            return is_string($v) ? trim($v) : $v;
+        }, $keys), function ($v) {
+            return $v !== null && $v !== '';
+        }));
 
-        foreach ($orderTransactions as $orderTransaction) {
-            try {
-                $filePath = public_path() . '/tmp/' . Carbon::now()->timestamp . Str::random(8) . '.pdf';
-                $fileTracking = $orderTransaction['label_url'];
-                $file = file_get_contents($fileTracking);
-                if (!$file) continue;
-                file_put_contents($filePath, $file);
-                $pdf->addPDF($filePath, 'all');
-                $files[] = $filePath;
-            } catch (Exception $e) {
-                Log::info($e->getMessage());
+        if (count($keys) === 0) {
+            return null;
+        }
+
+        // Resolve order IDs from numeric ids and/or order_code values (UI often sends order_code)
+        $numericIds = [];
+        $codes = [];
+        foreach ($keys as $key) {
+            if (is_numeric($key)) {
+                $numericIds[] = (int) $key;
+            } else {
+                $codes[] = (string) $key;
             }
         }
+
+        $orderIds = $numericIds;
+        if (count($codes)) {
+            $fromCodes = Order::whereIn('order_code', $codes)->pluck('id')->all();
+            $orderIds = array_values(array_unique(array_merge($orderIds, $fromCodes)));
+        }
+
+        if (count($orderIds) === 0) {
+            return null;
+        }
+
+        $files = [];
+        $outFile = $tmpDir . DIRECTORY_SEPARATOR . 'C_' . Carbon::now()->timestamp . Str::random(8) . '.pdf';
+
+        $orderTransactions = OrderTransaction::whereIn('order_id', $orderIds)
+            ->whereNotNull('label_url')
+            ->select('id', 'order_id', 'label_url')
+            ->get();
+
+        if ($orderTransactions->isEmpty()) {
+            return null;
+        }
+
+        try {
+            $pdf = PDFMerger::init();
+
+            foreach ($orderTransactions as $orderTransaction) {
+                try {
+                    $filePath = $tmpDir . DIRECTORY_SEPARATOR . Carbon::now()->timestamp . Str::random(8) . '.pdf';
+                    $fileTracking = $orderTransaction->label_url;
+                    if (!$fileTracking) {
+                        continue;
+                    }
+
+                    $file = $this->readLabelBinary($fileTracking);
+                    if ($file === null || $file === false || $file === '') {
+                        continue;
+                    }
+
+                    file_put_contents($filePath, $file);
+                    unset($file);
+                    $pdf->addPDF($filePath, 'all');
+                    $files[] = $filePath;
+                } catch (Exception $e) {
+                    Log::warning('orderPrintMultiple label skip: ' . $e->getMessage());
+                }
+            }
+
+            if (count($files) === 0) {
+                return null;
+            }
+
+            $pdf->merge();
+            $pdf->save($outFile);
+
+            return $outFile;
+        } catch (Exception $e) {
+            Log::error('orderPrintMultiple failed: ' . $e->getMessage());
+            return null;
+        } finally {
+            // Clean per-label temp copies only (keep merged $outFile for download)
+            foreach ($files as $tmpFile) {
+                if (is_string($tmpFile) && file_exists($tmpFile)) {
+                    @unlink($tmpFile);
+                }
+            }
+        }
+    }
+
+    /**
+     * Read label PDF/PNG binary from URL, /storage/... path, or public path.
+     * Does not delete source MyIB label files.
+     */
+    protected function readLabelBinary($labelUrl)
+    {
+        if (!$labelUrl || !is_string($labelUrl)) {
+            return null;
+        }
+
+        // Remote or absolute http(s) URL
+        if (preg_match('#^https?://#i', $labelUrl)) {
+            $data = @file_get_contents($labelUrl);
+            if ($data !== false && $data !== '') {
+                return $data;
+            }
+            // Fall through: try local path from URL path segment
+            $pathPart = parse_url($labelUrl, PHP_URL_PATH);
+            if ($pathPart) {
+                $labelUrl = $pathPart;
+            } else {
+                return null;
+            }
+        }
+
+        $path = str_replace('\\', '/', $labelUrl);
+
+        // storage public disk: /storage/uploads/PNX_LABEL/...
+        if (strpos($path, '/storage/') !== false || strpos($path, 'storage/') === 0) {
+            $relative = preg_replace('#^.*/storage/#', '', $path);
+            $relative = ltrim($relative, '/');
+            $full = storage_path('app/public/' . $relative);
+            if (is_file($full)) {
+                return @file_get_contents($full);
+            }
+        }
+
+        // public path
+        $publicCandidate = public_path(ltrim($path, '/'));
+        if (is_file($publicCandidate)) {
+            return @file_get_contents($publicCandidate);
+        }
+
+        if (is_file($path)) {
+            return @file_get_contents($path);
+        }
+
+        return null;
     }
 
 }

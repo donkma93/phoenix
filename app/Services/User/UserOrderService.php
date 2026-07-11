@@ -41,9 +41,8 @@ class UserOrderService extends UserBaseService implements UserBaseServiceInterfa
         try {
             $import = new UserOrdersImport();
 
+            // Read from uploaded temp file only — do NOT archive import xlsx/csv under public/imgs/orders
             Excel::import($import, $file);
-
-            $fileMove = $file->move('imgs' . DIRECTORY_SEPARATOR . Order::IMG_FOLDER, cleanName($file->getClientOriginalName()));
 
             if (count($import->errors)) {
                 return [
@@ -86,9 +85,9 @@ class UserOrderService extends UserBaseService implements UserBaseServiceInterfa
                         'partner_code' => $user->partner_code,
                         'partner_id' => $user->partner_id,
 
-
-                        'content' => $row,
-                        'file' => $fileMove,
+                        // Do not persist full Excel row JSON (was bloating DB) or source file path
+                        'content' => null,
+                        'file' => null,
                     ]);
                     
                     if (isset($row['order_number'])) {
@@ -142,9 +141,13 @@ class UserOrderService extends UserBaseService implements UserBaseServiceInterfa
 
             DB::commit();
 
+            // Free in-memory import payload ASAP (can be large for multi-thousand-row sheets)
+            $import->rows = [];
+            $import->addresses = [];
+            $import->products = [];
+
             return [
                 'isValid' => true,
-                'rawData' => $import->rows,
             ];
         } catch (Exception $e) {
             DB::rollback();
@@ -209,7 +212,13 @@ class UserOrderService extends UserBaseService implements UserBaseServiceInterfa
         Log::info("User create order");
         try {
             $now = Carbon::now();
-            $user = User::where('role', User::ROLE_USER)->find(Auth::id());
+            $user = User::find(Auth::id());
+            if (!$user) {
+                return [
+                    'request' => $request,
+                    'errorMsg' => ['User not found'],
+                ];
+            }
             $street = $request['shipping_street'];
             if ($request['shipping_address1']) {
                 $street .= ',' . $request['shipping_address1'];
@@ -318,10 +327,19 @@ class UserOrderService extends UserBaseService implements UserBaseServiceInterfa
 
     public function index($request)
     {
+        // Avoid loading orderRates on list (can be many rows per order)
         $orders = Order::with([
             'orderProducts.product', 'orderPackage', 'orderTransaction',
-            'addressFrom', 'addressTo', 'orderRates'
-        ])->where('user_id', Auth::id())->where('state', '<>', Order::STATE_ON_HOLD_VIP);
+            'addressFrom', 'addressTo',
+        ])
+            ->select([
+                'id', 'order_code', 'order_number', 'status', 'payment', 'fulfillment',
+                'state', 'user_id', 'partner_code',
+                'order_address_from_id', 'order_address_to_id',
+                'created_at', 'updated_at',
+            ])
+            ->where('user_id', Auth::id())
+            ->where('state', '<>', Order::STATE_ON_HOLD_VIP);
 
         if (isset($request['status'])) {
             $orders = $orders->where('status', $request['status']);
@@ -336,7 +354,7 @@ class UserOrderService extends UserBaseService implements UserBaseServiceInterfa
         }
 
         $orders = $orders->orderByDesc('updated_at')
-            ->paginate();
+            ->paginate(25);
 
         return [
             'orders' => $orders,

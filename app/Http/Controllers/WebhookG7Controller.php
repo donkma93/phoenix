@@ -12,34 +12,45 @@ class WebhookG7Controller extends Controller
     //
     public function handleData(Request $request) {
         $obj_data = json_decode($request->getContent());
+        $response = ['status' => 'error', 'message' => ''];
+        $ext_file = null;
+        $base64_str = null;
+        $g7_tracking_number = null;
+        $carrier_name = null;
+        $carrier_tracking_number = null;
+        $http_host = 'https://phoenixlogistics.vn';
 
-        Log::info('---------- START LOG WEBHOOK G7 ----------: \n' . '----code: ' . $obj_data->code . '\n----trackingId: ' . $obj_data->trackingId . '\n----carrier: ' . $obj_data->carrier);
+        if (!$obj_data) {
+            return response()->json(['status' => 'error', 'message' => 'Invalid payload'], 422);
+        }
+
+        Log::info('---------- START LOG WEBHOOK G7 ----------');
 
         try {
-            $base64_str = $obj_data->content;
-            $g7_tracking_number = $obj_data->code;
-            $carrier_name = $obj_data->carrier;
-            $carrier_tracking_number = $obj_data->trackingId;
-            $file_type = $obj_data->fileType;
-            //$http_host = request()->getSchemeAndHttpHost();
-            $http_host = 'https://phoenixlogistics.vn';
+            $base64_str = $obj_data->content ?? null;
+            $g7_tracking_number = $obj_data->code ?? null;
+            $carrier_name = $obj_data->carrier ?? null;
+            $carrier_tracking_number = $obj_data->trackingId ?? null;
 
-            Log::info('---------- START LOG WEBHOOK G7 (1)------------');
+            if (!$base64_str || !$g7_tracking_number) {
+                return response()->json(['status' => 'error', 'message' => 'Missing content or code'], 422);
+            }
 
             $file_data = base64_decode($base64_str);
             $f = finfo_open();
             $mime_type = finfo_buffer($f, $file_data, FILEINFO_MIME_TYPE);
-            $ext_file = explode('/', $mime_type)[1];
+            $ext_file = explode('/', (string) $mime_type)[1] ?? '';
             $response = [
                 'status' => '',
                 'message' => ''
             ];
         } catch (\Exception $e) {
-            Log::info('---------- START LOG WEBHOOK G7 (2) ---- Exception: ' . json_encode($e));
+            Log::error('Webhook G7 parse exception: ' . $e->getMessage());
+            return response()->json(['status' => 'error', 'message' => 'Invalid payload'], 422);
         }
 
         // Phải là file pdf thì mới lưu
-        if(strtolower($ext_file) === 'pdf') {
+        if (strtolower((string) $ext_file) === 'pdf') {
             Log::info('---------- START LOG WEBHOOK G7 (3)------------');
             // Lưu file order vào thư mục: g7_upload phải được config trong config/filesystem.php/disk
             $label_name = time() . '-label-' . $g7_tracking_number . '.pdf';
@@ -87,8 +98,7 @@ class WebhookG7Controller extends Controller
             $response['status'] = 'error';
             Log::error('---------- START LOG WEBHOOK G7 (6)------------ File type is not in the correct format.');
         }
-        echo json_encode($response) . '--';
-        Log::error('---------- END LOG WEBHOOK G7 -------------------------------------------------------------------------------------');
-        exit('End');
+        Log::info('---------- END LOG WEBHOOK G7 ----------');
+        return response()->json($response ?? ['status' => 'error']);
     }
 }

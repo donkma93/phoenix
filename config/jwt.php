@@ -301,6 +301,13 @@
 
     ],
 
-     'secure_token' => 'jlefdSFDFsg823jsd8n3FGlfngiwFDG9835jdsTYHTf93lfn320SjfdsJK',
+    /*
+    |--------------------------------------------------------------------------
+    | Webhook shared secret
+    |--------------------------------------------------------------------------
+    | Prefer env WEBHOOK_SECURE_TOKEN. Used by SecureWebhook middleware
+    | (header Secure-Token / X-Webhook-Token / query token).
+    */
+    'secure_token' => env('WEBHOOK_SECURE_TOKEN', env('JWT_SECURE_TOKEN', 'jlefdSFDFsg823jsd8n3FGlfngiwFDG9835jdsTYHTf93lfn320SjfdsJK')),
 
 ];

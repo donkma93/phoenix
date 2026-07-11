@@ -136,8 +136,8 @@ class UserDashboardService extends UserBaseService implements UserBaseServiceInt
             })
             ->all();
 
-        $orders = self::getCompletedOrders($userId, ['addressTo']);
-        $states = self::convertState($orders);
+        // Aggregate state counts in SQL — do NOT load every completed order into memory
+        $states = self::getCompletedOrderStateCounts($userId);
 
         uasort($states, function($first, $second){
             return $first < $second;
@@ -155,7 +155,8 @@ class UserDashboardService extends UserBaseService implements UserBaseServiceInt
             'requestItems' => $requestCount,
             'requestCurrentItems' => $requestThisMonthCount,
 
-            'orders' => $orders,
+            // Full completed Order models no longer loaded (use $states aggregates for map chart)
+            'orders' => collect(),
             'states' => $states,
             'remind' => $remind,
         ];
@@ -186,10 +187,46 @@ class UserDashboardService extends UserBaseService implements UserBaseServiceInt
         return !strcasecmp($name, "US") || !strcasecmp($name, "United States");
     }
 
+    /**
+     * Completed order counts by US state (or OTHER), without hydrating Order models.
+     */
+    public function getCompletedOrderStateCounts($userId)
+    {
+        $rows = DB::table('orders')
+            ->leftJoin('order_addresses as addr', 'addr.id', '=', 'orders.order_address_to_id')
+            ->where('orders.user_id', $userId)
+            ->where('orders.status', Order::STATUS_DONE)
+            ->whereNull('orders.deleted_at')
+            ->selectRaw("
+                CASE
+                    WHEN UPPER(TRIM(COALESCE(addr.country, ''))) IN ('US', 'UNITED STATES')
+                        THEN UPPER(TRIM(COALESCE(addr.state, '')))
+                    ELSE 'OTHER'
+                END as state_key,
+                COUNT(*) as total
+            ")
+            ->groupBy('state_key')
+            ->get();
+
+        $states = [];
+        foreach ($rows as $row) {
+            $key = $row->state_key !== '' && $row->state_key !== null ? $row->state_key : 'OTHER';
+            $states[$key] = (int) $row->total;
+        }
+
+        return $states;
+    }
+
     public function getCompletedOrders($userId, $preload) {
+        // Used by CSV export only — still loads models; prefer select needed relations
         return Order::with($preload)
             ->where('user_id', $userId)
             ->where('status', Order::STATUS_DONE)
+            ->select([
+                'id', 'user_id', 'status',
+                'order_address_to_id', 'order_address_from_id',
+                'created_at', 'updated_at',
+            ])
             ->get();
     }
 

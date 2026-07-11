@@ -45,37 +45,27 @@ class StaffOrderController extends StaffBaseController
             $input_data = $request->all();
             $date_from = $input_data['date_from'] ?? date('Y-m-d', strtotime('-1 month'));
             $date_to = $input_data['date_to'] ?? date('Y-m-d');
-            $order_status = $input_data['bill_status'] ?? 99; // 99 là lấy tất cả
+            $order_status = $input_data['bill_status'] ?? 99; // 99 = all
 
-            $data = $this->orderService->list($input_data);
+            // Suggest box needs id + email only (same UX as before; lighter than full User models)
+            $users = User::where('role', User::ROLE_USER)
+                ->select('id', 'email')
+                ->orderBy('email')
+                ->get();
 
-            $new_data['emails'] = User::where('role', User::ROLE_USER)->pluck('email')->toArray();
-            $new_data['users'] = User::where('role', User::ROLE_USER)->get();
+            $count_status = $this->orderService->getOrderStatusCounts($date_from, $date_to);
+            // Empty-state flag only; rows are loaded by DataTable AJAX (same as before)
+            $hasOrders = $this->orderService->hasOrdersInRange($date_from, $date_to, $order_status);
 
-            [$count_order_status, $list_orders] = Functions::CallRaw('order_list_staff', [
-                $date_from,
-                $date_to,
-                $order_status
-            ]);
-
-            $new_data['orders'] = $list_orders;
-            $count_status = [];
-
-            if (!!$count_order_status) {
-                foreach ($count_order_status as $v) {
-                    $count_status[$v->picking_status] = $v->count;
-                }
-            }
-
-            $data['tracking_status'] = config('app.tracking_status');
-            $data['count_status'] = $count_status;
-
-            $new_data['tracking_status'] = config('app.tracking_status');
-            $new_data['count_status'] = $count_status;
             $request->flash();
 
-//            return view('order.list', $data);
-            return view('order.list', $new_data);
+            return view('order.list', [
+                'emails' => $users->pluck('email')->values()->all(),
+                'users' => $users,
+                'orders' => $hasOrders ? [1] : [],
+                'tracking_status' => config('app.tracking_status'),
+                'count_status' => $count_status,
+            ]);
         } catch (Exception $e) {
             Log::error($e);
             //TODO redirect to error page
@@ -89,59 +79,30 @@ class StaffOrderController extends StaffBaseController
             $input_data = $request->all();
             $date_from = $input_data['date_from'] ?? date('Y-m-d', strtotime('-1 month'));
             $date_to = $input_data['date_to'] ?? date('Y-m-d');
-            $order_status = $input_data['bill_status'] ?? 99; // 99 là lấy tất cả
+            $order_status = $input_data['bill_status'] ?? 99; // 99 = all
 
-            $draw = intval($request->input('draw')); // DataTables draw counter
+            $draw = intval($request->input('draw'));
             $start = intval($request->input('start', 0));
             $length = intval($request->input('length', 50));
-            if ($length <= 0) { $length = 50; }
+            if ($length <= 0) {
+                $length = 50;
+            }
+            // Cap page size so a single AJAX call cannot load the entire dataset
+            $length = min($length, 100);
+
             $searchValue = trim($request->input('search.value', ''));
 
-            [$count_order_status, $list_orders] = \App\Helpers\Functions::CallRaw('order_list_staff', [
+            // True SQL LIMIT/OFFSET pagination — never load the full date-range into PHP memory
+            $result = $this->orderService->listForDataTable(
                 $date_from,
                 $date_to,
-                $order_status
-            ]);
+                $order_status,
+                $searchValue,
+                $start,
+                $length
+            );
 
-            $all = collect($list_orders ?? []);
-
-            $recordsTotal = $all->count();
-
-				if ($searchValue !== '') {
-					$terms = array_values(array_filter(array_map('trim', explode(',', $searchValue)), function($v){ return $v !== ''; }));
-					if (count($terms) === 0) {
-						$terms = [$searchValue];
-					}
-					$all = $all->filter(function ($row) use ($terms) {
-						$fields = [
-							isset($row->order_code) ? (string)$row->order_code : '',
-							isset($row->order_number) ? (string)$row->order_number : '',
-							isset($row->user_email) ? (string)$row->user_email : '',
-							isset($row->partner_code) ? (string)$row->partner_code : '',
-							isset($row->name) ? (string)$row->name : '',
-							isset($row->addr) ? (string)$row->addr : '',
-							isset($row->zip) ? (string)$row->zip : '',
-							isset($row->tracking_number) ? (string)$row->tracking_number : '',
-							isset($row->provider) ? (string)$row->provider : '',
-							isset($row->item) ? (string)$row->item : '',
-						];
-						foreach ($terms as $t) {
-							if ($t === '') { continue; }
-							foreach ($fields as $val) {
-								if ($val !== '' && stripos($val, $t) !== false) {
-									return true;
-								}
-							}
-						}
-						return false;
-					});
-				}
-
-            $recordsFiltered = $all->count();
-
-            $paged = $all->slice($start, $length);
-
-            $data = $paged->map(function ($order) {
+            $data = collect($result['rows'])->map(function ($order) {
                 $checkbox = '<input type="checkbox" class="order-checkbox" value="' . ($order->id ?? '') . '">';
                 $customerHtml = '<div>' . e($order->order_number ?? '') . '</div>'
                     . '<div>' . e($order->user_email ?? '') . '</div>'
@@ -168,9 +129,11 @@ class StaffOrderController extends StaffBaseController
 
                 $previewBtn = '';
                 if (isset($order->label_url) && ($order->picking_status ?? null) != 5) {
-                    $labelUrl = asset($order->label_url);
-                    // Check if file is an image
-                    $extension = strtolower(pathinfo($order->label_url, PATHINFO_EXTENSION));
+                    // Support both relative paths and absolute MyIB/storage URLs
+                    $rawLabel = $order->label_url;
+                    $labelUrl = preg_match('#^https?://#i', $rawLabel) ? $rawLabel : asset($rawLabel);
+                    $pathForExt = parse_url($rawLabel, PHP_URL_PATH) ?: $rawLabel;
+                    $extension = strtolower(pathinfo($pathForExt, PATHINFO_EXTENSION));
                     $imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp'];
                     if (in_array($extension, $imageExtensions)) {
                         $previewBtn = '<button type="button" class="fmus01 btn btn-sm btn-round btn-success btn-block" data-toggle="modal" data-target="#preview-label" onclick="previewImage(`' . $labelUrl . '`)">Preview</button>';
@@ -228,8 +191,8 @@ class StaffOrderController extends StaffBaseController
 
             return response()->json([
                 'draw' => $draw,
-                'recordsTotal' => $recordsTotal,
-                'recordsFiltered' => $recordsFiltered,
+                'recordsTotal' => $result['recordsTotal'],
+                'recordsFiltered' => $result['recordsFiltered'],
                 'data' => $data,
             ]);
         } catch (Exception $e) {
@@ -605,6 +568,11 @@ $data['extension'] = $extension;
                 }
 
                 if ($deleteSuccess) {
+                    // Capture local label path before deleting the DB row, then free disk
+                    $labelUrl = DB::table('order_transactions')
+                        ->where('order_id', $order_id)
+                        ->value('label_url');
+
                     DB::table('order_transactions')->where('order_id', $order_id)->delete();
 
                     DB::table('order_rates')->where('order_id', $order_id)->delete();
@@ -616,6 +584,10 @@ $data['extension'] = $extension;
                         ]);
 
                     DB::commit();
+
+                    if ($labelUrl) {
+                        deleteLocalMediaFile($labelUrl);
+                    }
 
                     $result = [
                         'status' => 'success',
@@ -1045,16 +1017,14 @@ $data['extension'] = $extension;
     {
         try {
             $data = $this->orderService->createLabelPdaApi($request);
-            if ($data['message_code'] != 'SUCCESS') {
-                return response($data, 400);
+            if (($data['message_code'] ?? null) != 'SUCCESS') {
+                return response()->json($data, 400);
             }
-            return $data;
+            return response()->json($data);
         } catch (Exception $e) {
             Log::error($e);
-            //TODO redirect to error page
-            // abort(500);
 
-            return response([
+            return response()->json([
                 'message_code' => 'UNEXPECTED_ERROR',
                 'message_text' => $e->getMessage()
             ], 400);
@@ -1574,16 +1544,14 @@ $data['extension'] = $extension;
     {
         try {
             $data = $this->orderService->getOrderPackageApi($request);
-            if ($data['message_code'] != 'SUCCESS') {
-                return response($data, 400);
+            if (($data['message_code'] ?? null) != 'SUCCESS') {
+                return response()->json($data, 400);
             }
-            return $data;
+            return response()->json($data);
         } catch (Exception $e) {
             Log::error($e);
-            //TODO redirect to error page
-            // abort(500);
 
-            return response([
+            return response()->json([
                 'message_code' => 'UNEXPECTED_ERROR',
                 'message_text' => $e->getMessage()
             ], 400);
@@ -1674,7 +1642,7 @@ $data['extension'] = $extension;
     public function checkTrackingExist(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'order_id' => 'required|integer|min:0|not_in:0'
+            'order_id' => 'required',
         ]);
 
         if ($validator->fails()) {
@@ -1682,131 +1650,224 @@ $data['extension'] = $extension;
                 'status' => 'error',
                 'tracking_number' => null,
                 'errors' => $validator->errors()
-            ]);
+            ], 422);
         }
 
-        $orderId = $request->input('order_id');
-        $res = DB::table('order_transactions')->where('order_id', $orderId)->first();
+        $order = \App\Support\ApiAccess::resolveOrder($request->input('order_id'));
+        if (!$order || !\App\Support\ApiAccess::canAccessOrder(auth()->user(), $order)) {
+            return response()->json([
+                'status' => 'error',
+                'tracking_number' => null,
+                'message' => 'Order not found or access denied',
+            ], 404);
+        }
+
+        $res = DB::table('order_transactions')->where('order_id', $order->id)->first();
 
         if ($res && $res->tracking_number) {
-            $trackingNumber = $res->tracking_number;
-
             return response()->json([
                 'status' => 'success',
-                'tracking_number' => $trackingNumber
+                'tracking_number' => $res->tracking_number,
+                'order_id' => $order->id,
+                'order_code' => $order->order_code,
             ]);
         }
 
         return response()->json([
             'status' => 'error',
-            'tracking_number' => null
+            'tracking_number' => null,
+            'message' => 'No tracking number for this order',
+        ], 404);
+    }
+
+    public function getLabelUrlByOrderId(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'order_id' => 'required',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => 'error',
+                'errors' => $validator->errors(),
+                'label_url' => null,
+            ], 422);
+        }
+
+        $order = \App\Support\ApiAccess::resolveOrder($request->input('order_id'));
+        if (!$order || !\App\Support\ApiAccess::canAccessOrder(auth()->user(), $order)) {
+            return response()->json([
+                'status' => 'error',
+                'order_id' => $request->input('order_id'),
+                'label_url' => null,
+                'message' => 'Order not found or access denied',
+            ], 404);
+        }
+
+        $tx = DB::table('order_transactions')->where('order_id', $order->id)->first();
+        if (!$tx || empty($tx->label_url)) {
+            return response()->json([
+                'status' => 'error',
+                'order_id' => $order->id,
+                'label_url' => null,
+                'message' => 'Label not found',
+            ], 404);
+        }
+
+        return response()->json([
+            'status' => 'success',
+            'order_id' => $order->id,
+            'order_code' => $order->order_code,
+            'label_url' => $tx->label_url,
+            'tracking_number' => $tx->tracking_number ?? null,
         ]);
     }
 
-    public function updateTrackingInfoByOrderId(Request $request) {
+    public function updateTrackingInfoByOrderId(Request $request)
+    {
         $validator = Validator::make($request->all(), [
-            'order_id' => 'required|integer|min:0|not_in:0',
-            'tracking_number' => 'required',
-            'shipping_carrier' => 'required|string',
-            'tracking_status' => 'nullable|string',
-            'label_url' => 'nullable|url',
+            'order_id' => 'required',
+            'tracking_number' => 'required|string|max:255',
+            'shipping_carrier' => 'required|string|max:255',
+            'tracking_status' => 'nullable|string|max:255',
+            'label_url' => 'nullable|url|max:2000',
+            'amount' => 'nullable|numeric',
+            'currency' => 'nullable|string|max:10',
         ]);
 
         if ($validator->fails()) {
             return response()->json([
                 'status' => 'error',
                 'errors' => $validator->errors()
-            ]);
+            ], 422);
         }
 
-        $orderId = $request->input('order_id');
+        $order = \App\Support\ApiAccess::resolveOrder($request->input('order_id'));
+        if (!$order || !\App\Support\ApiAccess::canAccessOrder(auth()->user(), $order)) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Order not found or access denied',
+            ], 404);
+        }
 
-        $orderInfo = DB::table('orders')->where('id', $orderId)->first();
+        // Staff-only write (route also has jwt.role, double-check)
+        if (!\App\Support\ApiAccess::isStaffRole(auth()->user())) {
+            return \App\Support\ApiAccess::forbidden();
+        }
+
+        $orderId = $order->id;
         $orderTrans = DB::table('order_transactions')->where('order_id', $orderId)->first();
 
-        if ($orderInfo && (!$orderTrans || !$orderTrans->tracking_number)) {
-            $orderPackage = DB::table('order_package')->where('order_id', $orderId)->first();
-
-            try {
-                $data = $request->input();
-
-                $user_id = auth()->user()->id;
-                $order_id = $orderInfo->id;
-                $shipping_name = 'HUNG LEU';
-                $shipping_street = '2248 US Highway 9,';
-                $shipping_address1 = null;
-                $shipping_address2 = null;
-                $shipping_company = 'LEU LEU FULFILLMENT';
-                $shipping_city = 'Howell';
-                $shipping_zip = '07731';
-                $shipping_province = 'NJ';
-                $shipping_country = 'US';
-                $shipping_phone = null;
-                $amount = $data['amount'] ?? 0;
-                $currency = $data['currency'] ?? 'VND';
-                $label_url = $data['label_url'];
-                $tracking_provider = null;
-                $tracking_number = $data['tracking_number'];
-                $shipping_carrier = $data['shipping_carrier'];
-                $shipping_provider = 'PIRATE';
-                $width = $orderPackage->width;
-                $height = $orderPackage->height;
-                $length = $orderPackage->length;
-                $weight = $orderPackage->weight;
-                $size_type = $orderPackage->size_type;
-                $weight_type = $orderPackage->weight_type;
-                $tracking_status = $data['tracking_status'];
-
-
-                DB::select('call label_create_input(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [
-                    $user_id,
-                    $order_id,
-                    $shipping_name,
-                    $shipping_street,
-                    $shipping_address1,
-                    $shipping_address2,
-                    $shipping_company,
-                    $shipping_city,
-                    $shipping_zip,
-                    $shipping_province,
-                    $shipping_country,
-                    $shipping_phone,
-                    $amount,
-                    $currency,
-                    $label_url,
-                    $tracking_provider,
-                    $tracking_number,
-                    $shipping_carrier,
-                    $shipping_provider,
-                    $width,
-                    $height,
-                    $length,
-                    $weight,
-                    $size_type,
-                    $weight_type,
-                    $tracking_status
-                ]);
-
-                return response()->json([
-                    'status' => 'success',
-                    'message' => 'Update label successful!',
-                ]);
-            } catch (Exception $e) {
-                Log::error('===== gsgdfdhdgfhf: ' . $e->getMessage());
-
-                return response()->json([
-                    'status' => 'error',
-                    'message' => $e->getMessage(),
-                    'file_error' => $e->getFile(),
-                    'line_error' => $e->getLine(),
-                ]);
-            }
+        if ($orderTrans && $orderTrans->tracking_number) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Order already has a tracking number.',
+            ], 409);
         }
 
-        return response()->json([
-            'status' => 'error',
-            'message' => 'Order ' . $orderId . ' not found.',
-        ]);
+        $orderPackage = DB::table('order_package')->where('order_id', $orderId)->first();
+        if (!$orderPackage) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Order package dimensions not found. Update package before setting tracking.',
+            ], 422);
+        }
+
+        try {
+            $data = $request->input();
+            $user_id = auth()->user()->id;
+
+            // Prefer warehouse / existing from-address over hard-coded ship-from when available
+            $from = null;
+            if ($order->order_address_from_id) {
+                $from = DB::table('order_addresses')->where('id', $order->order_address_from_id)->first();
+            }
+            if (!$from) {
+                $warehouse = DB::table('warehouses')->where('type', 'B')->first();
+                if ($warehouse) {
+                    $from = (object) [
+                        'name' => $warehouse->name ?? 'Warehouse',
+                        'street1' => $warehouse->address ?? '',
+                        'street2' => null,
+                        'street3' => null,
+                        'company' => $warehouse->name ?? '',
+                        'city' => $warehouse->city ?? '',
+                        'zip' => $warehouse->zip ?? '',
+                        'state' => $warehouse->state ?? '',
+                        'country' => $warehouse->country ?? 'US',
+                        'phone' => $warehouse->phone ?? null,
+                    ];
+                }
+            }
+
+            $shipping_name = $from->name ?? 'Warehouse';
+            $shipping_street = $from->street1 ?? '';
+            $shipping_address1 = $from->street2 ?? null;
+            $shipping_address2 = $from->street3 ?? null;
+            $shipping_company = $from->company ?? '';
+            $shipping_city = $from->city ?? '';
+            $shipping_zip = $from->zip ?? '';
+            $shipping_province = $from->state ?? '';
+            $shipping_country = $from->country ?? 'US';
+            $shipping_phone = $from->phone ?? null;
+
+            $amount = $data['amount'] ?? 0;
+            $currency = $data['currency'] ?? 'USD';
+            $label_url = $data['label_url'] ?? null;
+            $tracking_provider = null;
+            $tracking_number = $data['tracking_number'];
+            $shipping_carrier = $data['shipping_carrier'];
+            $shipping_provider = $data['shipping_provider'] ?? 'MANUAL';
+            $width = $orderPackage->width;
+            $height = $orderPackage->height;
+            $length = $orderPackage->length;
+            $weight = $orderPackage->weight;
+            $size_type = $orderPackage->size_type;
+            $weight_type = $orderPackage->weight_type;
+            $tracking_status = $data['tracking_status'] ?? 'UNKNOWN';
+
+            DB::select('call label_create_input(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [
+                $user_id,
+                $orderId,
+                $shipping_name,
+                $shipping_street,
+                $shipping_address1,
+                $shipping_address2,
+                $shipping_company,
+                $shipping_city,
+                $shipping_zip,
+                $shipping_province,
+                $shipping_country,
+                $shipping_phone,
+                $amount,
+                $currency,
+                $label_url,
+                $tracking_provider,
+                $tracking_number,
+                $shipping_carrier,
+                $shipping_provider,
+                $width,
+                $height,
+                $length,
+                $weight,
+                $size_type,
+                $weight_type,
+                $tracking_status
+            ]);
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Update label successful!',
+                'order_id' => $orderId,
+            ]);
+        } catch (Exception $e) {
+            Log::error('updateTrackingInfoByOrderId: ' . $e->getMessage());
+
+            return response()->json([
+                'status' => 'error',
+                'message' => $e->getMessage(),
+            ], 500);
+        }
     }
 
     public function downloadPreviews(Request $request)

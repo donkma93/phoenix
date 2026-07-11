@@ -14,6 +14,7 @@ class Kernel extends ConsoleKernel
      */
     protected $commands = [
         Commands\MonthlyInvoice::class,
+        Commands\CleanupStorage::class,
     ];
 
     /**
@@ -26,6 +27,12 @@ class Kernel extends ConsoleKernel
     {
         $schedule->command('voice:monthly')
             ->monthly();
+
+        // Safe disk reclaim ONLY: import xlsx/csv, public/tmp merge PDFs, debugbar.
+        // Never deletes MyIB tracking label PDFs (uploads/PNX_LABEL).
+        $schedule->command('storage:cleanup --days=14 --tmp-hours=24 --debugbar-hours=24')
+            ->dailyAt('03:15')
+            ->withoutOverlapping();
     }
 
     /**
