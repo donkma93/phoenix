@@ -32,5 +32,22 @@ return [
 
     'shippo' => [
         'key' => env('SHIPPO_API_KEY'),
-    ]
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Shipbae (Gori Company) API
+    |--------------------------------------------------------------------------
+    |
+    | Staging: https://staging.api.goricompany.com/v2
+    | Production: https://api.goricompany.com/v2
+    | Docs: https://docs-dev.goricompany.com/api/documentation
+    |
+    */
+    'shipbae' => [
+        'base_url' => env('SHIPBAE_BASE_URL', 'https://staging.api.goricompany.com/v2'),
+        'client_id' => env('SHIPBAE_CLIENT_ID', ''),
+        'client_secret' => env('SHIPBAE_CLIENT_SECRET', ''),
+        'timeout' => (int) env('SHIPBAE_TIMEOUT', 60),
+    ],
 ];

@@ -754,6 +754,10 @@
                                         value="{{ __('Buy labels via Myib') }}">
                                 </div>
                                 <div class="text-center text-sm-left ml-2">
+                                    <input class="btn btn-success btn-round create_label_shipbae" type="button"
+                                        value="{{ __('Buy labels via Shipbae') }}">
+                                </div>
+                                <div class="text-center text-sm-left ml-2">
                                     <input class="btn btn-warning btn-round create_label_other exc_validate"
                                         type="button" data-toggle="modal" data-target="#noticeModal"
                                         value="{{ __('Mua labels ngoài') }}">
@@ -848,21 +852,13 @@
 @push('scripts')
     <script>
         $(document).ready(function() {
-            $('.create_label_myib').on('click', function() {
-                console.log('========================================');
-                console.log('🚀 [MYIB] Button clicked - Starting process');
-                console.log('========================================');
-
+            function validateCreateLabelForm(logPrefix) {
                 let isValidate = true;
                 let validationErrors = [];
 
-                // Clear previous validation errors
-                console.log('[MYIB] Clearing previous validation errors...');
                 $('.form-group').removeClass('invalid');
                 $('.form_message').text('');
 
-                // Validate form fields
-                console.log('[MYIB] Starting form validation...');
                 let requiredFields = [
                     '#shipping_name',
                     '#shipping_country',
@@ -879,15 +875,11 @@
                 requiredFields.forEach(function(fieldSelector) {
                     let field = $(fieldSelector);
                     if (!field.length) {
-                        console.warn('[MYIB] ⚠️ Field not found: ' + fieldSelector);
                         validationErrors.push('Field not found: ' + fieldSelector);
                         isValidate = false;
                     } else {
                         let fieldValue = field.val();
-                        console.log('[MYIB] Checking field ' + fieldSelector + ' = "' + fieldValue +
-                            '"');
                         if (fieldValue.trim() === '' || fieldValue == 0) {
-                            console.warn('[MYIB] ⚠️ Field is empty or zero: ' + fieldSelector);
                             validationErrors.push('Empty field: ' + fieldSelector);
                             isValidate = false;
                             field.closest('.form-group').addClass('invalid');
@@ -899,11 +891,8 @@
                     }
                 });
 
-                // Validate size_type and weight_type
-                console.log('[MYIB] Validating size_type and weight_type...');
                 let sizeType = $('#size_type');
                 if (!sizeType.length || !sizeType.val() || sizeType.val().trim() === '') {
-                    console.warn('[MYIB] ⚠️ size_type is missing or empty');
                     validationErrors.push('size_type is required');
                     isValidate = false;
                     sizeType.closest('.form-group, .apx-4').addClass('invalid');
@@ -911,13 +900,10 @@
                     if (errorMsg.length) {
                         errorMsg.text('Vui lòng chọn loại kích thước!');
                     }
-                } else {
-                    console.log('[MYIB] ✓ size_type = ' + sizeType.val());
                 }
 
                 let weightType = $('#weight_type');
                 if (!weightType.length || !weightType.val() || weightType.val().trim() === '') {
-                    console.warn('[MYIB] ⚠️ weight_type is missing or empty');
                     validationErrors.push('weight_type is required');
                     isValidate = false;
                     weightType.closest('.form-group, .apx-4').addClass('invalid');
@@ -925,74 +911,73 @@
                     if (errorMsg.length) {
                         errorMsg.text('Vui lòng chọn loại trọng lượng!');
                     }
-                } else {
-                    console.log('[MYIB] ✓ weight_type = ' + weightType.val());
                 }
 
-                if (isValidate) {
-                    console.log('[MYIB] ✅ Validation passed! All fields are valid.');
-                    console.log('[MYIB] Showing confirmation dialog...');
-
-                    let is_confirm = confirm('Are you sure you want to create a label?');
-
-                    if (is_confirm) {
-                        console.log('[MYIB] ✅ User confirmed. Proceeding with form submission...');
-
-                        let $this = $(this);
-                        $this.prop('disabled', true);
-                        console.log('[MYIB] Button disabled to prevent double-click');
-
-                        setTimeout(function() {
-                            $this.prop('disabled', false);
-                            console.log('[MYIB] Button re-enabled after 10 seconds');
-                        }, 10000)
-
-                        let url = "{{ route('staff.orders.labels.create.myib') }}";
-                        console.log('[MYIB] 📤 Form submission URL: ' + url);
-
-                        let $form = $('#create_label_form');
-                        if ($form.length) {
-                            console.log('[MYIB] ✓ Form found, setting action and submitting...');
-                            console.log('[MYIB] Form action before: ' + $form.attr('action'));
-
-                            $form.prop('action', url);
-                            console.log('[MYIB] Form action after: ' + $form.attr('action'));
-
-                            // Log form data
-                            let formData = $form.serialize();
-                            console.log('[MYIB] Form data: ' + formData.substring(0, 200) + '...');
-
-                            console.log('[MYIB] 🚀 Submitting form now...');
-                            $form.submit();
-                            console.log('[MYIB] ✅ Form submitted successfully!');
-                        } else {
-                            console.error('[MYIB] ❌ ERROR: Form #create_label_form not found!');
-                            alert('Lỗi: Không tìm thấy form. Vui lòng tải lại trang.');
-                        }
-                    } else {
-                        console.log('[MYIB] ❌ User cancelled confirmation dialog');
-                    }
-                } else {
-                    console.log('[MYIB] ❌ Validation failed!');
-                    console.log('[MYIB] Validation errors:', validationErrors);
-                    console.log('[MYIB] Total errors: ' + validationErrors.length);
-
-                    // Scroll to first invalid field
+                if (!isValidate) {
+                    console.log('[' + logPrefix + '] Validation failed:', validationErrors);
                     let firstInvalid = $('.form-group.invalid, .apx-4.invalid').first();
                     if (firstInvalid.length) {
-                        console.log('[MYIB] Scrolling to first invalid field...');
                         $('html, body').animate({
                             scrollTop: firstInvalid.offset().top - 100
                         }, 500);
                     } else {
-                        console.warn('[MYIB] ⚠️ No invalid fields found to scroll to');
                         alert('Vui lòng điền đầy đủ thông tin bắt buộc!');
                     }
                 }
 
-                console.log('========================================');
-                console.log('[MYIB] Process completed');
-                console.log('========================================');
+                return isValidate;
+            }
+
+            $('.create_label_myib').on('click', function() {
+                if (!validateCreateLabelForm('MYIB')) {
+                    return;
+                }
+
+                let is_confirm = confirm('Are you sure you want to create a label?');
+                if (!is_confirm) {
+                    return;
+                }
+
+                let $this = $(this);
+                $this.prop('disabled', true);
+                setTimeout(function() {
+                    $this.prop('disabled', false);
+                }, 10000)
+
+                let url = "{{ route('staff.orders.labels.create.myib') }}";
+                let $form = $('#create_label_form');
+                if ($form.length) {
+                    $form.prop('action', url);
+                    $form.submit();
+                } else {
+                    alert('Lỗi: Không tìm thấy form. Vui lòng tải lại trang.');
+                }
+            })
+
+            $('.create_label_shipbae').on('click', function() {
+                if (!validateCreateLabelForm('SHIPBAE')) {
+                    return;
+                }
+
+                let is_confirm = confirm('Are you sure you want to create a Shipbae label?');
+                if (!is_confirm) {
+                    return;
+                }
+
+                let $this = $(this);
+                $this.prop('disabled', true);
+                setTimeout(function() {
+                    $this.prop('disabled', false);
+                }, 10000)
+
+                let url = "{{ route('staff.orders.labels.create.shipbae') }}";
+                let $form = $('#create_label_form');
+                if ($form.length) {
+                    $form.prop('action', url);
+                    $form.submit();
+                } else {
+                    alert('Lỗi: Không tìm thấy form. Vui lòng tải lại trang.');
+                }
             })
 
             $('.create_label_normal').on('click', function() {

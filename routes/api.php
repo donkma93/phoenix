@@ -8,6 +8,7 @@ use App\Http\Controllers\Staff\StaffOrderController;
 use App\Http\Controllers\WebhookShippoController;
 use App\Http\Controllers\Webhook17trackController;
 use App\Http\Controllers\WebhookMyibController;
+use App\Http\Controllers\WebhookShipbaeController;
 use App\Http\Controllers\User\UserOrderController;
 use App\Http\Controllers\User\UserPackageGroupController;
 
@@ -89,6 +90,10 @@ Route::post('/webhook-shippo', [WebhookShippoController::class, 'handle_data'])
 
 Route::post('/myib-webhook', [WebhookMyibController::class, 'handleData'])
     ->name('webhook.myib')
+    ->middleware('webhooksecure');
+
+Route::post('/shipbae-webhook', [WebhookShipbaeController::class, 'handleData'])
+    ->name('webhook.shipbae')
     ->middleware('webhooksecure');
 
 Route::post('/webhook-17track', [Webhook17trackController::class, 'handleData'])

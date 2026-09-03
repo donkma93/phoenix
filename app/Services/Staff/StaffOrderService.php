@@ -29,6 +29,7 @@ use Shippo_Order;
 use App\Imports\ImportPricesExcel;
 use App\Models\PriceList;
 use App\Imports\Staff\StaffLabelsImport;
+use App\Services\Shipbae\ShipbaeClient;
 
 class StaffOrderService extends StaffBaseService implements StaffBaseServiceInterface
 {
@@ -1596,11 +1597,13 @@ $i++;
         // Filter by provider if specified
         if ($provider === 'shippo') {
             $query->where(function($q) {
-                $q->where('object_owner', '!=', 'myib')
+                $q->whereNotIn('object_owner', ['myib', 'shipbae'])
                   ->orWhereNull('object_owner');
             });
         } elseif ($provider === 'myib') {
             $query->where('object_owner', 'myib');
+        } elseif ($provider === 'shipbae') {
+            $query->where('object_owner', 'shipbae');
         }
         
         return $query->get();
@@ -1744,7 +1747,7 @@ $i++;
                 ];
             }
             
-            // Check if this is a Myib rate
+            // Check if this is a Myib / Shipbae rate
             if ($orderRate->object_owner === 'myib') {
                 $transaction = $this->createMyibTransaction($orderRate, $order, $orderPackage);
 
@@ -1776,6 +1779,37 @@ $i++;
                         'errorMsg' => ['Failed to save label data: ' . $e->getMessage()],
                     ];
                 }
+            } elseif ($orderRate->object_owner === 'shipbae') {
+                $transaction = $this->createShipbaeTransaction($orderRate, $order, $orderPackage);
+
+                if (count($transaction['errorMsg'])) {
+                    DB::rollBack();
+                    return [
+                        'errorMsg' => $transaction['errorMsg'],
+                        'httpCode' => $transaction['httpCode'] ?? 400
+                    ];
+                }
+
+                if (!isset($transaction['value']) || !is_array($transaction['value'])) {
+                    DB::rollBack();
+                    Log::error('Shipbae transaction missing value', ['transaction' => $transaction]);
+                    return [
+                        'errorMsg' => ['Invalid response from Shipbae API'],
+                    ];
+                }
+
+                try {
+                    $this->persistShipbaeLabelData($order, $orderPackage, $orderRate, $transaction['value']);
+                } catch (Exception $e) {
+                    DB::rollBack();
+                    Log::error('persistShipbaeLabelData failed in storeRate', [
+                        'message' => $e->getMessage(),
+                        'order_id' => $orderId
+                    ]);
+                    return [
+                        'errorMsg' => ['Failed to save label data: ' . $e->getMessage()],
+                    ];
+                }
             } else {
                 // Handle Shippo rate
                 $transaction = OrderTransaction::createTransaction($orderRate->object_id, $shippoOrder);
@@ -1792,7 +1826,13 @@ $i++;
             }
 
             // Determine shipping provider based on rate
-            $shippingProvider = ($orderRate->object_owner === 'myib') ? 'MYIB' : 'SHIPPO';
+            if ($orderRate->object_owner === 'myib') {
+                $shippingProvider = 'MYIB';
+            } elseif ($orderRate->object_owner === 'shipbae') {
+                $shippingProvider = 'SHIPBAE';
+            } else {
+                $shippingProvider = 'SHIPPO';
+            }
             
             OrderTransaction::updateOrCreate([
                 'order_id' => $orderId,
@@ -1831,7 +1871,13 @@ $i++;
                 $addTo = DB::table('order_addresses')->where('id', $order->order_address_to_id)->first();
                 
                 // Determine carrier based on rate provider
-                $carrier = ($orderRate->object_owner === 'myib') ? 'myib' : 'shippo';
+                if ($orderRate->object_owner === 'myib') {
+                    $carrier = 'myib';
+                } elseif ($orderRate->object_owner === 'shipbae') {
+                    $carrier = 'shipbae';
+                } else {
+                    $carrier = 'shippo';
+                }
                 
                 $dataSendApi = (object) [
                     'event' => 'transaction_created',
@@ -3111,6 +3157,781 @@ $i++;
         }
 
         return '';
+    }
+
+    public function storeLabelShipbae($request, $orderId)
+    {
+        DB::beginTransaction();
+
+        try {
+            $order = Order::findOrFail($orderId);
+
+            OrderPackage::where('order_id', $orderId)->update([
+                'width' => $request['package_width'],
+                'height' => $request['package_height'],
+                'length' => $request['package_length'],
+                'weight' => $request['package_weight'],
+                'size_type' => $request['size_type'],
+                'weight_type' => $request['weight_type']
+            ]);
+
+            $street = $request['shipping_street'];
+            if ($request['shipping_address1']) {
+                $street .= ',' . $request['shipping_address1'];
+            }
+            if ($request['shipping_address2']) {
+                $street .= ',' . $request['shipping_address2'];
+            }
+
+            $addressFrom = [
+                'name' => $request['shipping_name'],
+                'company' => $request['shipping_company'],
+                'street1' => $street,
+                'street2' => $request['shipping_address1'],
+                'street3' => $request['shipping_address2'],
+                'city' => $request['shipping_city'],
+                'state' => $request['shipping_province'],
+                'zip' => $request['shipping_zip'],
+                'country' => $request['shipping_country'],
+                'phone' => $request['shipping_phone'],
+            ];
+
+            $dataFrom = Order::validateAddress($addressFrom);
+            if (count($dataFrom['errorMsg'])) {
+                return [
+                    'request' => $request,
+                    'errorMsg' => $dataFrom['errorMsg']
+                ];
+            }
+
+            $addressFrom['street1'] = $request['shipping_street'];
+            $addressFrom['user_id'] = $order->user_id;
+            $addressFrom['object_id'] = $dataFrom['value']['object_id'] ?? null;
+            $orderAddressFrom = OrderAddress::create($addressFrom);
+
+            $order->order_address_from_id = $orderAddressFrom->id;
+            $order->save();
+
+            $order = Order::with(['orderPackage', 'addressFrom', 'addressTo'])->findOrFail($orderId);
+            $package = $order->orderPackage;
+            $shipmentPayload = $this->prepareShipbaeShipmentPayload($order, $package);
+
+            $shipbaeRates = $this->getShipbaeRates($shipmentPayload);
+            if (count($shipbaeRates) == 0) {
+                return [
+                    'request' => $request,
+                    'errorMsg' => ['Rates Unavailable from Shipbae API']
+                ];
+            }
+
+            $orderRates = $this->setShipbaeRates($shipbaeRates, $orderId);
+            if (!count($orderRates)) {
+                return [
+                    'request' => $request,
+                    'errorMsg' => ['Rates Unavailable']
+                ];
+            }
+
+            OrderRate::insert($orderRates);
+            DB::commit();
+
+            return [
+                'request' => $request,
+                'rates' => $orderRates,
+                'errorMsg' => [],
+                'provider' => 'shipbae'
+            ];
+        } catch (Exception $e) {
+            DB::rollback();
+            Log::error('storeLabelShipbae Exception: ' . $e->getMessage());
+            throw $e;
+        }
+    }
+
+    public function storeExcelShipbae($file, $request)
+    {
+        try {
+            $import = new StaffLabelsImport();
+            Excel::import($import, $file);
+
+            if (count($import->errors)) {
+                return [
+                    'isValid' => false,
+                    'message' => 'Validate failed',
+                    'errors' => $import->errors
+                ];
+            }
+
+            $ordersError = [];
+            $ordersSkip = [];
+
+            foreach ($import->rows as $key => $row) {
+                $rs = DB::table('order_transactions')->where('order_id', $row['order_id'])->first();
+                if (!!$rs) {
+                    array_push($ordersSkip, $row['order_id']);
+                    continue;
+                }
+
+                try {
+                    $order = $this->createLabel($row['order_id'])['order'];
+
+                    $addressFrom = [
+                        'name' => $row['shipping_name'] ?? '',
+                        'company' => $row['shipping_company'] ?? null,
+                        'street1' => $row['shipping_street'] ?? '',
+                        'street2' => $row['shipping_address1'] ?? null,
+                        'street3' => $row['shipping_address2'] ?? null,
+                        'city' => $row['shipping_city'] ?? '',
+                        'state' => $row['shipping_province'] ?? '',
+                        'zip' => $row['shipping_zip'] ?? '',
+                        'country' => $row['shipping_country'] ?? '',
+                        'phone' => $row['shipping_phone'] ?? null,
+                    ];
+
+                    if (!$order->addressFrom) {
+                        $dataFrom = Order::validateAddress($addressFrom);
+                        if (count($dataFrom['errorMsg'])) {
+                            Log::error('IMPORT LABELS SHIPBAE: Address validation failed for order ' . $row['order_id'], [
+                                'errors' => $dataFrom['errorMsg']
+                            ]);
+                            array_push($ordersError, $row['order_id']);
+                            continue;
+                        }
+
+                        $addressFrom['street1'] = $row['shipping_street'] ?? '';
+                        $addressFrom['user_id'] = $order->user_id;
+                        $addressFrom['object_id'] = $dataFrom['value']['object_id'] ?? null;
+                        $orderAddressFrom = OrderAddress::create($addressFrom);
+                        $order->order_address_from_id = $orderAddressFrom->id;
+                        $order->save();
+                    }
+
+                    $order = Order::with(['orderPackage', 'addressFrom', 'addressTo'])->findOrFail($row['order_id']);
+
+                    if (isset($row['package_width']) || isset($row['package_height']) ||
+                        isset($row['package_length']) || isset($row['package_weight'])) {
+                        $packageData = [];
+                        if (isset($row['package_width'])) $packageData['width'] = $row['package_width'];
+                        if (isset($row['package_height'])) $packageData['height'] = $row['package_height'];
+                        if (isset($row['package_length'])) $packageData['length'] = $row['package_length'];
+                        if (isset($row['package_weight'])) $packageData['weight'] = $row['package_weight'];
+                        if (isset($row['size_type'])) $packageData['size_type'] = $row['size_type'];
+                        if (isset($row['weight_type'])) $packageData['weight_type'] = $row['weight_type'];
+
+                        OrderPackage::where('order_id', $order->id)->update($packageData);
+                        $order->load('orderPackage');
+                    }
+
+                    $package = $order->orderPackage;
+                    if (!$package) {
+                        Log::error('IMPORT LABELS SHIPBAE: Order package not found for order ' . $row['order_id']);
+                        array_push($ordersError, $row['order_id']);
+                        continue;
+                    }
+
+                    $shipmentPayload = $this->prepareShipbaeShipmentPayload($order, $package);
+                    $shipbaeRates = $this->getShipbaeRates($shipmentPayload);
+
+                    if (count($shipbaeRates) == 0) {
+                        Log::error('IMPORT LABELS SHIPBAE: No rates available for order ' . $row['order_id']);
+                        array_push($ordersError, $row['order_id']);
+                        continue;
+                    }
+
+                    $selectedRate = null;
+                    if (!empty($row['service'])) {
+                        foreach ($shipbaeRates as $rate) {
+                            $serviceMatch = ($rate['service'] ?? null) === $row['service'];
+                            $packageMatch = empty($row['package_type']) || (($rate['package_type'] ?? null) === $row['package_type']);
+                            if ($serviceMatch && $packageMatch) {
+                                $selectedRate = $rate;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!$selectedRate) {
+                        usort($shipbaeRates, function ($a, $b) {
+                            return $this->extractShipbaeAmount($a) <=> $this->extractShipbaeAmount($b);
+                        });
+                        $selectedRate = $shipbaeRates[0];
+                    }
+
+                    Log::info('IMPORT LABELS SHIPBAE: Selected rate for order ' . $row['order_id'], [
+                        'carrier' => $selectedRate['carrier'] ?? null,
+                        'service' => $selectedRate['service'] ?? null,
+                        'package_type' => $selectedRate['package_type'] ?? null,
+                        'amount' => $this->extractShipbaeAmount($selectedRate),
+                    ]);
+
+                    $createPayload = $this->prepareShipbaeShipmentPayload(
+                        $order,
+                        $package,
+                        $selectedRate['service'] ?? null,
+                        $selectedRate['package_type'] ?? 'custom_package'
+                    );
+
+                    $transaction = $this->createShipbaeTransactionFromPayload($createPayload, $order);
+                    if (count($transaction['errorMsg'])) {
+                        Log::error('IMPORT LABELS SHIPBAE: API error for order ' . $row['order_id'], [
+                            'errors' => $transaction['errorMsg']
+                        ]);
+                        array_push($ordersError, $row['order_id']);
+                        continue;
+                    }
+
+                    if (!isset($transaction['value']) || !is_array($transaction['value'])) {
+                        Log::error('IMPORT LABELS SHIPBAE: Invalid response for order ' . $row['order_id']);
+                        array_push($ordersError, $row['order_id']);
+                        continue;
+                    }
+
+                    $this->persistShipbaeLabelData($order, $package, null, $transaction['value']);
+
+                    Log::info('IMPORT LABELS SHIPBAE: Successfully created label for order ' . $row['order_id'], [
+                        'tracking_number' => $transaction['value']['tracking_number'] ?? null
+                    ]);
+                } catch (Exception $e) {
+                    Log::error('IMPORT LABELS SHIPBAE: Exception for order ' . ($row['order_id'] ?? 'unknown'), [
+                        'message' => $e->getMessage(),
+                        'file' => $e->getFile(),
+                        'line' => $e->getLine()
+                    ]);
+                    array_push($ordersError, $row['order_id'] ?? 'unknown');
+                }
+            }
+
+            if (count($ordersSkip) > 0) {
+                Log::info('IMPORT LABELS SHIPBAE: ORDERS SKIP ' . implode(', ', $ordersSkip));
+            }
+
+            return [
+                'isValid' => true,
+                'rawData' => $import->rows,
+                'ordersError' => $ordersError,
+            ];
+        } catch (Exception $e) {
+            Log::error('storeExcelShipbae Exception: ' . $e->getMessage());
+            throw $e;
+        }
+    }
+
+    private function convertDimensionsToShipbae($package): array
+    {
+        $defaultLength = 6.0;
+        $defaultWidth = 6.0;
+        $defaultHeight = 6.0;
+
+        if (!$package) {
+            return [
+                'length' => $defaultLength,
+                'width' => $defaultWidth,
+                'height' => $defaultHeight,
+            ];
+        }
+
+        $length = (float) ($package->length ?? 0);
+        $width = (float) ($package->width ?? 0);
+        $height = (float) ($package->height ?? 0);
+
+        // Gori parcel dimensions are inches.
+        if ((int) $package->size_type === OrderPackage::SIZE_CM) {
+            $length /= 2.54;
+            $width /= 2.54;
+            $height /= 2.54;
+        }
+
+        return [
+            'length' => round(max($length > 0 ? $length : $defaultLength, 0.1), 2),
+            'width' => round(max($width > 0 ? $width : $defaultWidth, 0.1), 2),
+            'height' => round(max($height > 0 ? $height : $defaultHeight, 0.1), 2),
+        ];
+    }
+
+    private function convertWeightToShipbaeOz($package): float
+    {
+        $defaultOz = 1.0;
+
+        if (!$package) {
+            return $defaultOz;
+        }
+
+        $weight = (float) ($package->weight ?? 0);
+        if ($weight <= 0) {
+            return $defaultOz;
+        }
+
+        // Gori parcel weight is ounces.
+        if ((int) $package->weight_type === OrderPackage::WEIGHT_LB) {
+            $weight *= 16;
+        }
+
+        return round(max($weight, 0.1), 3);
+    }
+
+    private function mapAddressToShipbae($address, $fallbackEmail = null): array
+    {
+        $nameParts = $this->splitName($address->name ?? '');
+
+        $mapped = [
+            'company' => $address->company ?? null,
+            'first_name' => $nameParts['first'] ?: 'Customer',
+            'last_name' => $nameParts['last'] ?: 'Customer',
+            'street1' => $address->street1 ?? '',
+            'street2' => $address->street2 ?? ($address->street3 ?? null),
+            'city' => $address->city ?? '',
+            'state' => $address->state ?? '',
+            'zip' => $address->zip ?? '',
+            'country' => $this->getCountryCode($address->country ?? 'US'),
+            'phone' => $address->phone ?? null,
+            'email' => $address->email ?? $fallbackEmail,
+            'is_residential' => empty($address->company),
+        ];
+
+        return array_filter($mapped, function ($value) {
+            return $value !== null && $value !== '';
+        });
+    }
+
+    private function prepareShipbaeShipmentPayload($order, $package, ?string $service = null, ?string $packageType = null): array
+    {
+        $addressFrom = $order->addressFrom;
+        $addressTo = $order->addressTo;
+
+        if (!$addressFrom) {
+            $addressFrom = (object) [
+                'company' => $order->shipping_company ?? '',
+                'name' => $order->shipping_name ?? '',
+                'street1' => $order->shipping_street ?? '',
+                'street2' => $order->shipping_address1 ?? '',
+                'street3' => $order->shipping_address2 ?? '',
+                'city' => $order->shipping_city ?? '',
+                'state' => $order->shipping_province ?? '',
+                'zip' => $order->shipping_zip ?? '',
+                'country' => $order->shipping_country ?? '',
+                'phone' => $order->shipping_phone ?? '',
+                'email' => ($order->user->email ?? null),
+            ];
+        }
+
+        if (!$addressTo) {
+            $addressTo = (object) [
+                'company' => $order->shipping_company ?? '',
+                'name' => $order->shipping_name ?? '',
+                'street1' => $order->shipping_street ?? '',
+                'street2' => $order->shipping_address1 ?? '',
+                'street3' => $order->shipping_address2 ?? '',
+                'city' => $order->shipping_city ?? '',
+                'state' => $order->shipping_province ?? '',
+                'zip' => $order->shipping_zip ?? '',
+                'country' => $order->shipping_country ?? '',
+                'phone' => $order->shipping_phone ?? '',
+                'email' => ($order->user->email ?? null),
+            ];
+        }
+
+        $dimensions = $this->convertDimensionsToShipbae($package);
+        $weightOz = $this->convertWeightToShipbaeOz($package);
+        $fallbackEmail = $order->user->email ?? null;
+
+        $parcel = [
+            'length' => $dimensions['length'],
+            'width' => $dimensions['width'],
+            'height' => $dimensions['height'],
+            'weight' => $weightOz,
+            'package_type' => $packageType ?: 'custom_package',
+        ];
+
+        $payload = [
+            'from_address' => $this->mapAddressToShipbae($addressFrom, $fallbackEmail),
+            'to_address' => $this->mapAddressToShipbae($addressTo, $fallbackEmail),
+            'parcel' => $parcel,
+            'reference_1' => substr((string) ($order->order_number ?? $order->id), 0, 30),
+        ];
+
+        if ($service) {
+            $payload['service'] = $service;
+        }
+
+        return $payload;
+    }
+
+    private function getShipbaeRates(array $shipmentPayload): array
+    {
+        $client = new ShipbaeClient();
+        if (!$client->isConfigured()) {
+            Log::error('Shipbae is not configured');
+            return [];
+        }
+
+        // Rates endpoint returns all services when service is omitted.
+        unset($shipmentPayload['service']);
+
+        $response = $client->getRates($shipmentPayload);
+        if (!$response['ok'] || !is_array($response['data'])) {
+            Log::error('Shipbae getRates failed', [
+                'http_code' => $response['http_code'],
+                'error' => $response['error'],
+            ]);
+            return [];
+        }
+
+        $rates = [];
+        foreach ($response['data'] as $rate) {
+            if (!is_array($rate)) {
+                continue;
+            }
+            if (!empty($rate['error'])) {
+                continue;
+            }
+            if ($this->extractShipbaeAmount($rate) <= 0) {
+                continue;
+            }
+            $rates[] = $rate;
+        }
+
+        return $rates;
+    }
+
+    private function extractShipbaeAmount($rate): float
+    {
+        if (!is_array($rate)) {
+            return 0.0;
+        }
+
+        $fees = $rate['fees'] ?? null;
+        if (is_array($fees)) {
+            if (isset($fees['amount'])) {
+                return (float) $fees['amount'];
+            }
+
+            $total = 0.0;
+            $found = false;
+            foreach ($fees as $fee) {
+                if (is_array($fee) && isset($fee['amount'])) {
+                    $total += (float) $fee['amount'];
+                    $found = true;
+                }
+            }
+            if ($found) {
+                return $total;
+            }
+        }
+
+        return (float) ($rate['amount'] ?? 0);
+    }
+
+    public function setShipbaeRates($shipbaeRates, $orderId)
+    {
+        $orderRates = [];
+        $now = Carbon::now();
+
+        foreach ($shipbaeRates as $rate) {
+            $amount = $this->extractShipbaeAmount($rate);
+            $carrier = strtoupper((string) ($rate['carrier'] ?? 'SHIPBAE'));
+            $service = (string) ($rate['service'] ?? 'service');
+            $packageType = (string) ($rate['package_type'] ?? 'custom_package');
+            $serviceLabel = strtoupper(str_replace('_', ' ', $service));
+            $packageLabel = strtoupper(str_replace('_', ' ', $packageType));
+
+            $orderRates[] = [
+                'order_id' => $orderId,
+                'is_active' => false,
+                'object_id' => json_encode($rate),
+                'object_owner' => 'shipbae',
+                'shipment' => null,
+                'attributes' => json_encode([
+                    'carrier' => $rate['carrier'] ?? null,
+                    'service' => $rate['service'] ?? null,
+                    'package_type' => $rate['package_type'] ?? 'custom_package',
+                    'zone' => $rate['zone'] ?? null,
+                ]),
+                'amount' => round($amount, 2),
+                'currency' => 'USD',
+                'amount_local' => round($amount, 2),
+                'currency_local' => 'USD',
+                'provider' => 'Shipbae',
+                'provider_image_75' => '',
+                'provider_image_200' => '',
+                'service_name' => trim($carrier . ' ' . $serviceLabel . ' / ' . $packageLabel),
+                'messages' => json_encode([]),
+                'estimated_days' => null,
+                'duration_terms' => isset($rate['zone']) ? ('Zone ' . $rate['zone']) : '',
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+        }
+
+        usort($orderRates, function ($first, $second) {
+            return (float) $first['amount'] <=> (float) $second['amount'];
+        });
+
+        return $orderRates;
+    }
+
+    private function createShipbaeTransaction($orderRate, $order, $orderPackage)
+    {
+        try {
+            $attributes = null;
+            if (is_string($orderRate->attributes) && $orderRate->attributes !== '') {
+                $attributes = json_decode($orderRate->attributes, true);
+            } elseif (is_array($orderRate->attributes)) {
+                $attributes = $orderRate->attributes;
+            }
+            if (!is_array($attributes)) {
+                $attributes = [];
+            }
+
+            $service = $attributes['service'] ?? null;
+            $packageType = $attributes['package_type'] ?? 'custom_package';
+
+            if (!$service && is_string($orderRate->object_id)) {
+                $rateData = json_decode($orderRate->object_id, true);
+                if (is_array($rateData)) {
+                    $service = $rateData['service'] ?? $service;
+                    $packageType = $rateData['package_type'] ?? $packageType;
+                }
+            }
+
+            if (!$service) {
+                return [
+                    'value' => null,
+                    'errorMsg' => ['Shipbae rate is missing service'],
+                    'httpCode' => 400,
+                ];
+            }
+
+            $payload = $this->prepareShipbaeShipmentPayload($order, $orderPackage, $service, $packageType);
+            return $this->createShipbaeTransactionFromPayload($payload, $order, $orderRate);
+        } catch (Exception $e) {
+            Log::error('createShipbaeTransaction Exception', [
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
+            return [
+                'value' => null,
+                'errorMsg' => [$e->getMessage()],
+                'httpCode' => 500,
+            ];
+        }
+    }
+
+    private function createShipbaeTransactionFromPayload(array $payload, $order, $orderRate = null)
+    {
+        try {
+            $client = new ShipbaeClient();
+            if (!$client->isConfigured()) {
+                return [
+                    'value' => null,
+                    'errorMsg' => ['Shipbae API credentials not configured'],
+                    'httpCode' => 500,
+                ];
+            }
+
+            if (empty($payload['service'])) {
+                return [
+                    'value' => null,
+                    'errorMsg' => ['Shipbae create shipment requires service'],
+                    'httpCode' => 400,
+                ];
+            }
+
+            Log::info('Shipbae create shipment request', [
+                'order_id' => $order->id ?? null,
+                'service' => $payload['service'] ?? null,
+                'package_type' => $payload['parcel']['package_type'] ?? null,
+            ]);
+
+            $response = $client->createShipment($payload);
+            if (!$response['ok'] || !is_array($response['data'])) {
+                return [
+                    'value' => null,
+                    'errorMsg' => [$response['error'] ?: 'Failed to create Shipbae shipment'],
+                    'httpCode' => $response['http_code'] ?: 500,
+                ];
+            }
+
+            $data = $response['data'];
+            $shipmentId = $data['id'] ?? null;
+            $trackingNumber = $data['tracking_code'] ?? ($data['customer_tracking_number'] ?? null);
+            $labelUrl = $data['label']['image_url'] ?? ($data['label_url'] ?? null);
+            $labelBase64 = $data['label']['image_base64'] ?? null;
+
+            if (!$labelUrl && is_string($labelBase64) && $labelBase64 !== '') {
+                $labelUrl = $this->saveShipbaeLabelFromBase64($labelBase64, $shipmentId ?: ($order->order_number ?? $order->id));
+            }
+
+            $amount = null;
+            if (isset($data['fees'])) {
+                if (is_array($data['fees']) && isset($data['fees']['amount'])) {
+                    $amount = (float) $data['fees']['amount'];
+                } elseif (is_array($data['fees'])) {
+                    $sum = 0.0;
+                    $found = false;
+                    foreach ($data['fees'] as $fee) {
+                        if (is_array($fee) && isset($fee['amount'])) {
+                            $sum += (float) $fee['amount'];
+                            $found = true;
+                        }
+                    }
+                    if ($found) {
+                        $amount = $sum;
+                    }
+                }
+            }
+            if ($amount === null && $orderRate) {
+                $amount = (float) ($orderRate->amount ?? 0);
+            }
+
+            return [
+                'value' => [
+                    'object_id' => $shipmentId !== null ? (string) $shipmentId : null,
+                    'label_url' => $labelUrl,
+                    'tracking_number' => $trackingNumber,
+                    'tracking_status' => 'Unknown',
+                    'tracking_url_provider' => null,
+                    'amount' => $amount !== null ? round((float) $amount, 2) : null,
+                    'currency' => 'USD',
+                    'carrier' => $data['carrier'] ?? null,
+                    'service' => $data['service'] ?? ($payload['service'] ?? null),
+                    'object_created' => $data['created_at'] ?? now()->toIso8601String(),
+                ],
+                'errorMsg' => [],
+                'httpCode' => 200,
+            ];
+        } catch (Exception $e) {
+            Log::error('createShipbaeTransactionFromPayload Exception', [
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
+            return [
+                'value' => null,
+                'errorMsg' => [$e->getMessage()],
+                'httpCode' => 500,
+            ];
+        }
+    }
+
+    private function saveShipbaeLabelFromBase64(string $base64, $fileKey): ?string
+    {
+        try {
+            if (Str::startsWith($base64, 'data:')) {
+                $parts = explode(',', $base64, 2);
+                $base64 = $parts[1] ?? '';
+            }
+
+            $decoded = base64_decode($base64, true);
+            if ($decoded === false || strlen($decoded) === 0) {
+                return null;
+            }
+
+            $folder = 'uploads/PNX_LABEL/' . date('Ym');
+            $isPdf = substr($decoded, 0, 4) === '%PDF';
+
+            if ($isPdf) {
+                $relativePath = $folder . '/' . $fileKey . '.pdf';
+                Storage::disk('public')->put($relativePath, $decoded);
+                return asset('storage/' . $relativePath);
+            }
+
+            $pdfContent = $this->convertImageToPdf($decoded, 'png');
+            if ($pdfContent !== null) {
+                $relativePath = $folder . '/' . $fileKey . '.pdf';
+                Storage::disk('public')->put($relativePath, $pdfContent);
+                return asset('storage/' . $relativePath);
+            }
+
+            $relativePath = $folder . '/' . $fileKey . '.png';
+            Storage::disk('public')->put($relativePath, $decoded);
+            return asset('storage/' . $relativePath);
+        } catch (Exception $e) {
+            Log::error('saveShipbaeLabelFromBase64 error: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    private function persistShipbaeLabelData(Order $order, ?OrderPackage $orderPackage, ?OrderRate $orderRate, array $transactionValue): void
+    {
+        try {
+            $addressFrom = $order->addressFrom;
+
+            if (!$addressFrom) {
+                $addressFrom = (object) [
+                    'name' => $order->shipping_name ?? '',
+                    'street1' => $order->shipping_street ?? '',
+                    'street2' => $order->shipping_address1 ?? '',
+                    'street3' => $order->shipping_address2 ?? '',
+                    'company' => $order->shipping_company ?? '',
+                    'city' => $order->shipping_city ?? '',
+                    'zip' => $order->shipping_zip ?? '',
+                    'state' => $order->shipping_province ?? '',
+                    'country' => $order->shipping_country ?? '',
+                    'phone' => $order->shipping_phone ?? '',
+                ];
+            }
+
+            $userId = Auth::id() ?? $order->user_id;
+            $amount = round((float) ($transactionValue['amount'] ?? ($orderRate->amount ?? null) ?? 0), 2);
+            $currency = $transactionValue['currency'] ?? ($orderRate->currency ?? null) ?? 'USD';
+            $labelUrl = $transactionValue['label_url'] ?? null;
+            $trackingNumber = $transactionValue['tracking_number'] ?? null;
+            $trackingStatus = $transactionValue['tracking_status'] ?? null;
+            $trackingProvider = $transactionValue['object_id'] ?? 'SHIPBAE';
+            $shippingCarrier = strtoupper((string) ($transactionValue['carrier'] ?? 'SHIPBAE'));
+
+            $width = $orderPackage ? ($orderPackage->width ?? 0) : 0;
+            $height = $orderPackage ? ($orderPackage->height ?? 0) : 0;
+            $length = $orderPackage ? ($orderPackage->length ?? 0) : 0;
+            $weight = $orderPackage ? ($orderPackage->weight ?? 0) : 0;
+            $sizeType = $orderPackage ? ($orderPackage->size_type ?? null) : null;
+            $weightType = $orderPackage ? ($orderPackage->weight_type ?? null) : null;
+
+            Log::info('Persisting Shipbae label data', [
+                'order_id' => $order->id,
+                'tracking_number' => $trackingNumber,
+                'label_url' => $labelUrl,
+                'amount' => $amount
+            ]);
+
+            DB::select('call label_create_input(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [
+                $userId,
+                $order->id,
+                $addressFrom->name ?? '',
+                $addressFrom->street1 ?? '',
+                $addressFrom->street2 ?? '',
+                $addressFrom->street3 ?? '',
+                $addressFrom->company ?? '',
+                $addressFrom->city ?? '',
+                $addressFrom->zip ?? '',
+                $addressFrom->state ?? '',
+                $addressFrom->country ?? '',
+                $addressFrom->phone ?? '',
+                $amount,
+                $currency,
+                $labelUrl ?? '',
+                $trackingProvider,
+                $trackingNumber ?? '',
+                $shippingCarrier,
+                'SHIPBAE',
+                $width,
+                $height,
+                $length,
+                $weight,
+                $sizeType,
+                $weightType,
+                $trackingStatus,
+            ]);
+        } catch (Exception $e) {
+            Log::error('persistShipbaeLabelData Exception', [
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'order_id' => $order->id ?? null
+            ]);
+            throw $e;
+        }
     }
 
     /**

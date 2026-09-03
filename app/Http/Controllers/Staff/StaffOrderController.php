@@ -801,6 +801,32 @@ $data['extension'] = $extension;
         }
     }
 
+    public function importLabelShipbae(Request $request)
+    {
+        try {
+            $data = $this->orderService->storeExcelShipbae(request()->file('label_file'), $request->all());
+
+            if (!$data['isValid']) {
+                return back()
+                    ->with('error', $data['message'] ?? '')
+                    ->with('csvErrorsShipbae', $data['errors'] ?? [])
+                    ->with('errorsForeachShipbae', $data['errorsArr'] ?? []);
+            }
+
+            if (count($data['ordersError']) > 0) {
+                Log::warning('IMPORT LABELS SHIPBAE FAILED: ' . implode(', ', $data['ordersError']));
+
+                return redirect()->route('staff.orders.list')->with('warning', 'Create failed: ' . implode(', ', $data['ordersError']));
+            }
+
+            return redirect()->route('staff.orders.list')->with('success', "Create labels successful");
+        } catch (Exception $e) {
+            Log::error($e);
+
+            return redirect()->route('staff.orders.list')->with('error', "Create labels failed");
+        }
+    }
+
     /**
      * Create a new order.
      *
@@ -963,6 +989,31 @@ $data['extension'] = $extension;
 
         } catch (Exception $e) {
             Log::error('===== LOG createLabelMyib Exception: ' . $e->getMessage());
+            return redirect()->route('staff.orders.list')->with('fail', "Create new label failed");
+        }
+    }
+
+    public function createLabelShipbae(StoreLabelRequest $request)
+    {
+        Log::info('============ LOG START createLabelShipbae Order code: ' . $request->get('order_code') . ' ============================================================');
+        try {
+            $orderId = $request->get('order_id');
+            $data = $this->orderService->storeLabelShipbae($request->all(), $orderId);
+
+            if (count($data['errorMsg'])) {
+                Log::error('===== LOG createLabelShipbae Error: ' . json_encode($data['errorMsg']));
+                return redirect()->back()
+                    ->with('fail', "Information is invalid.")
+                    ->with('errorData', $data);
+            }
+
+            session(['label_provider' => 'shipbae']);
+
+            return redirect()->route('staff.orders.rates.create', ['orderId' => $orderId, 'provider' => 'shipbae'])
+                ->with('success', "Create successed. Please choose rate.");
+
+        } catch (Exception $e) {
+            Log::error('===== LOG createLabelShipbae Exception: ' . $e->getMessage());
             return redirect()->route('staff.orders.list')->with('fail', "Create new label failed");
         }
     }

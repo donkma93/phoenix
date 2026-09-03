@@ -266,6 +266,18 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Shipbae (Gori Company) API Credentials
+    |--------------------------------------------------------------------------
+    |
+    | Prefer config('services.shipbae.*'). These aliases exist for convenience.
+    |
+    */
+    'shipbae_base_url' => env('SHIPBAE_BASE_URL', 'https://staging.api.goricompany.com/v2'),
+    'shipbae_client_id' => env('SHIPBAE_CLIENT_ID', ''),
+    'shipbae_client_secret' => env('SHIPBAE_CLIENT_SECRET', ''),
+
+    /*
+    |--------------------------------------------------------------------------
     | List tracking status
     |--------------------------------------------------------------------------
     | Lấy theo danh sách tracking status của shippo
