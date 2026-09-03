@@ -10,95 +10,86 @@ class Webhook17trackController extends Controller
 {
     /**
      * @param Request $request
-     * @return json
+     * @return \Illuminate\Http\JsonResponse
      */
     public function handleData(Request $request)
     {
-        // We have access to the request body here
-        // So, you can perform any logic with the data
-        // In my own case, I will add the delay function
-
-        Log::info('----------START LOG WEBHOOK 17TRACK----------: \n' . $request->getContent());
+        Log::info('----------START LOG WEBHOOK 17TRACK----------');
 
         $webhook_data = json_decode($request->getContent());
-
-        $p_code = $webhook_data->data->number; // Master bill
-        $carrier_id = $webhook_data->data->carrier;
-        $carrier_name = $webhook_data->data->track_info->tracking->providers[0]->provider->name;
-        $tracking_status = $webhook_data->data->track_info->latest_status->status;
-        $tracking_status_code = 2; // Để mặc định là 2 - Transit
-
-        try {
-            Log::info('----------START LOG WEBHOOK 17TRACK---------- (1)');
-            // Từ master bill vào bảng packing_list để lấy packing_list_code
-            $packing_list_code = DB::table('packing_list')->where('master_bill', $p_code)->value('packing_list_code');
-
-            // Lấy ra các order có trong packing_list_code đó
-            $list_order = DB::select('call search_packinglist_detail(?)', [$packing_list_code]);
-            Log::info('----------START LOG WEBHOOK 17TRACK---------- (2)');
-        } catch (\Exception $e) {
-            Log::info('----------START LOG WEBHOOK 17TRACK--- (3) Exception: ' . json_encode($e));
+        if (!$webhook_data || !isset($webhook_data->data->number)) {
+            return response()->json(['status' => 'error', 'message' => 'Invalid payload'], 422);
         }
 
-        //echo json_encode($list_order); exit();
+        $p_code = $webhook_data->data->number; // Master bill
+        $carrier_name = $webhook_data->data->track_info->tracking->providers[0]->provider->name
+            ?? ($webhook_data->data->carrier ?? 'UNKNOWN');
+        $tracking_status = $webhook_data->data->track_info->latest_status->status ?? 'TRANSIT';
+
+        try {
+            $packing_list_code = DB::table('packing_list')->where('master_bill', $p_code)->value('packing_list_code');
+            if (!$packing_list_code) {
+                Log::warning('17track webhook: packing list not found for master bill', ['bill' => $p_code]);
+                return response()->json(['status' => 'ok', 'message' => 'Packing list not found']);
+            }
+
+            $list_order = DB::select('call search_packinglist_detail(?)', [$packing_list_code]);
+        } catch (\Exception $e) {
+            Log::error('17track webhook resolve packing list failed: ' . $e->getMessage());
+            return response()->json(['status' => 'error', 'message' => 'Internal error'], 500);
+        }
+
+        if (empty($list_order)) {
+            return response()->json(['status' => 'ok', 'message' => 'No orders']);
+        }
+
+        $events = $webhook_data->data->track_info->tracking->providers[0]->events ?? [];
 
         foreach ($list_order as $order) {
-
-            // Cập nhật lại status trong bảng orders (dùng lại cột picking_status để lưu tracking status -> lamdt)
             try {
-                DB::table('orders')
-                    ->where('id', '=', $order->id)
+                // Update carrier tracking on transactions — do NOT overwrite warehouse picking_status
+                DB::table('order_transactions')
+                    ->where('order_id', $order->id)
                     ->update([
-                        'picking_status' => $tracking_status_code,
-                        'updated_at' => date('Y-m-d H:i:s')
+                        'tracking_status' => $tracking_status,
+                        'shipping_carrier' => $carrier_name,
+                        'updated_at' => now(),
                     ]);
-
-                // Kiểm tra hành trình xem đã tồn tại chưa, và trả về số lượng hành trình
-                // { CALL phoenix.webhook_info_shippo(:p_code,:p_provider) }
-                /*$results = DB::select('call webhook_info_shippo(?,?)', [
-                    $p_code,
-                    $carrier_name
-                ]);*/
 
                 $count_events_inserted = DB::table('order_tracking_journey')->where([
                     ['bill_code_ref', $p_code],
                     ['carrier', $carrier_name],
-                    ['bill_code', $order->order_code]
+                    ['bill_code', $order->order_code],
                 ])->count();
 
-                // Nếu có hành trình hoặc hành trình thay đổi thì cập nhật hành trình
-                $total_current_events = $webhook_data->data->track_info->tracking->providers[0]->events;
-                //$total_current_events = array_reverse($total_current_events);
+                $toInsert = count($events) - $count_events_inserted;
+                for ($i = 0; $i < $toInsert; $i++) {
+                    $event = $events[$i];
+                    $address = $event->address ?? null;
+                    $p_location = $address
+                        ? (($address->city ?? '') . ', ' . ($address->state ?? '') . ', ' . ($address->country ?? ''))
+                        : '';
 
-                for ($i = 0; $i < count($total_current_events) - $count_events_inserted; $i++) {
-                    $event = $total_current_events[$i];
-
-                    $p_bill_ref = $p_code;
-                    $p_status = 'TRANSIT';
-                    $p_note = $event->description;
-                    $p_location = $event->address->city . ', ' . $event->address->state . ', ' . $event->address->country;
-                    $p_city = $event->address->city;
-                    $p_country = $event->address->country;
-                    $p_date_journey = date('Y-m-d H:i:s', strtotime($event->time_utc));
-
-                    $rs = DB::select("call webhook_trackupdate_17track(?,?,?,?,?,?,?,?,?)", [
-                        $p_bill_ref,
+                    DB::select('call webhook_trackupdate_17track(?,?,?,?,?,?,?,?,?)', [
+                        $p_code,
                         $carrier_name,
                         $order->order_code,
-                        $p_status,
-                        $p_note,
+                        'TRANSIT',
+                        $event->description ?? null,
                         $p_location,
-                        $p_city,
-                        $p_country,
-                        $p_date_journey
+                        $address->city ?? null,
+                        $address->country ?? null,
+                        isset($event->time_utc) ? date('Y-m-d H:i:s', strtotime($event->time_utc)) : null,
                     ]);
                 }
             } catch (\Exception $e) {
-                Log::info('----------START LOG WEBHOOK 17TRACK--- (4) Exception: ' . json_encode($e));
+                Log::error('17track webhook order update failed: ' . $e->getMessage(), [
+                    'order_id' => $order->id ?? null,
+                ]);
             }
         }
 
-        Log::info('----------END LOG WEBHOOK 17TRACK------------');
-        exit('End');
+        Log::info('----------END LOG WEBHOOK 17TRACK----------');
+        return response()->json(['status' => 'ok']);
     }
 }

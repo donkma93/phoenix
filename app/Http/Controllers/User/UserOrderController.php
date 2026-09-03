@@ -31,28 +31,27 @@ class UserOrderController extends UserBaseController
     public function index(Request $request)
     {
         try {
-            // $data = $this->orderService->index($request->all());
-
-            $data = [];
+            // Keep original stored-procedure flow (same columns/filters as before)
             $userId = auth()->user()->id;
-            $dateFrom = trim($request->input('date_from'));
-            $dateTo = trim($request->input('date_to'));
+            $dateFrom = trim((string) $request->input('date_from'));
+            $dateTo = trim((string) $request->input('date_to'));
             if (!$dateTo) {
                 $dateTo = date('Y-m-d');
             }
             if (!$dateFrom) {
                 $dateFrom = date('Y-m-d', strtotime('-1 month'));
             }
+
             $results = DB::select('call customer_order_list(?,?,?)', [
                 $dateFrom,
                 $dateTo,
                 $userId
             ]);
 
-            $data['orders'] = $results;
-            $data['oldInput'] = $request->input();
-
-            return view('user.order.index', $data);
+            return view('user.order.index', [
+                'orders' => $results,
+                'oldInput' => $request->input(),
+            ]);
         } catch (Exception $e) {
             Log::error($e);
             //TODO redirect to error page
@@ -300,7 +299,7 @@ class UserOrderController extends UserBaseController
             'package_weight' => 'nullable|numeric|gt:0',
 
             'product' => 'required|array|min:1',
-            'product.*.id' => 'required|distinct',
+            'product.*.id' => 'required|distinct|integer',
             'product.*.unit_number' => 'required|integer|min:1',
             'product.*.sku' => 'required|max:255',
         ], [], [
@@ -313,37 +312,62 @@ class UserOrderController extends UserBaseController
         if ($validator->fails()) {
             return response()->json([
                 'status' => 'error',
-                'errorMsg' => $validator->errors() // get array errors
-            ]);
+                'errorMsg' => $validator->errors()
+            ], 422);
         }
 
-        // Retrieve the validated input...
         $validated = $validator->validated();
 
-        // Lấy bảng giá
-        // Từ id lấy ra partner_code trong bảng users, sau đó từ partner_code lấy ra id_price_table trong bảng partners
-        $id_price_table = null;
-        $partner_code = Auth::user()->partner_code;
-
-        if (!!$partner_code) {
-            $id_price_table = DB::table('partners')->where('partner_code', $partner_code)->value('id_price_table');
+        // Product ownership: only products belonging to the authenticated customer
+        $productIds = collect($validated['product'])->pluck('id')->unique()->values();
+        $ownedCount = DB::table('products')
+            ->where('user_id', Auth::id())
+            ->whereNull('deleted_at')
+            ->whereIn('id', $productIds)
+            ->count();
+        if ($ownedCount !== $productIds->count()) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'One or more products do not belong to this account.',
+                'errorMsg' => ['product' => ['Invalid product id for current user']],
+            ], 422);
         }
 
+        // Multi-line or multi-qty requires explicit package dimensions
+        $needsDims = count($validated['product']) > 1
+            || collect($validated['product'])->sum('unit_number') > 1;
+        if ($needsDims) {
+            foreach (['package_width', 'package_height', 'package_length', 'package_weight'] as $dim) {
+                if (empty($validated[$dim])) {
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => 'Package dimensions and weight are required for multi-item orders.',
+                        'errorMsg' => [$dim => ['Required for multi-item orders']],
+                    ], 422);
+                }
+            }
+        }
+
+        $id_price_table = null;
+        $partner_code = Auth::user()->partner_code;
+        if ($partner_code) {
+            $id_price_table = DB::table('partners')->where('partner_code', $partner_code)->value('id_price_table');
+        }
         $validated['id_price_table'] = $id_price_table;
 
         try {
             $data = $this->orderService->store($validated);
 
-            if (count($data['errorMsg'])) {
+            if (count($data['errorMsg'] ?? [])) {
                 Log::error("Create order API error: " . json_encode($data));
                 $data['status'] = 'error';
-                return response()->json($data);
+                return response()->json($data, 422);
             }
 
             return response()->json([
                 'status' => 'success',
                 'message' => 'Created order successfully.',
-                'orderCode' => $data['orderCode'],
+                'orderCode' => $data['orderCode'] ?? null,
             ]);
         } catch (Exception $e) {
             Log::error($e);
@@ -351,7 +375,7 @@ class UserOrderController extends UserBaseController
             return response()->json([
                 'status' => 'error',
                 'message' => $e->getMessage()
-            ]);
+            ], 500);
         }
     }
 
@@ -394,30 +418,35 @@ class UserOrderController extends UserBaseController
     }
 
     public function getOrderDetail(Request $request) {
-        $customerOrderCode = trim($request->get('customer_order_code'));
-        if (!$customerOrderCode) {
+        // Accept both customer_order_code (order_number) and order_code
+        $customerOrderCode = trim((string) ($request->get('customer_order_code') ?: $request->get('order_code') ?: ''));
+        if ($customerOrderCode === '') {
             return response()->json([
-                'status' => 'failed',
+                'status' => 'error',
                 'message' => 'Order code is required.'
-            ]);
+            ], 422);
         }
 
         $order = DB::table('orders')
-            ->where('order_number', $customerOrderCode)
             ->where('user_id', auth()->id())
             ->whereNull('deleted_at')
+            ->where(function ($q) use ($customerOrderCode) {
+                $q->where('order_number', $customerOrderCode)
+                    ->orWhere('order_code', $customerOrderCode);
+            })
             ->first();
 
         if (!$order) {
             return response()->json([
-                'status' => 'failed',
+                'status' => 'error',
                 'message' => 'Order not found.'
-            ]);
+            ], 404);
         }
 
         $response = [
-            'status' => 'succeed',
+            'status' => 'success',
             'customer_order_code' => $customerOrderCode,
+            'order_code' => $order->order_code ?? null,
             'carrier' => null,
             'tracking_number' => null,
             'tracking_status' => null,

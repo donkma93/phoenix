@@ -66,6 +66,7 @@ class Kernel extends HttpKernel
         'role' => \App\Http\Middleware\Role::class,
         'setlocale' => \App\Http\Middleware\SetLocale::class,
         'jwt.verify' => \App\Http\Middleware\JwtMiddleware::class,
+        'jwt.role' => \App\Http\Middleware\JwtRole::class,
         'webhooksecure' => \App\Http\Middleware\SecureWebhook::class,
     ];
 }

@@ -342,31 +342,50 @@ class PackingListController extends Controller
 
     public function packinglist_search($packing_code)
     {
-
-
-        if (Auth::user()->role ==  1) {
-            $packing_list = DB::select('call search_packinglist_detail(?)', [$packing_code]);
-            return response()->json($packing_list);
+        if (!Auth::check()) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Unauthenticated',
+            ], 401);
         }
+
+        // Staff-like roles may search packing lists
+        if (!\App\Support\ApiAccess::isStaffRole(Auth::user())) {
+            return response()->json([
+                'status' => 'error',
+                'message_code' => 'FORBIDDEN',
+                'message' => 'You do not have permission to search packing lists.',
+            ], 403);
+        }
+
+        $packing_list = DB::select('call search_packinglist_detail(?)', [$packing_code]);
+        return response()->json([
+            'status' => 'success',
+            'data' => $packing_list,
+        ]);
     }
 
 
     public function bill_search($bill_code)
     {
+        if (!Auth::check()) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Unauthenticated',
+            ], 401);
+        }
 
-        $results = Functions::CallRaw('search_bill',[
+        $results = Functions::CallRaw('search_bill', [
             $bill_code
         ]);
 
-        $packingList = $results[1]? $results[1][0]:'';
+        $packingList = isset($results[1][0]) ? $results[1][0] : null;
 
-        $result = [
-            'bill_info' => $results[0][0] ?? '',
+        return response()->json([
+            'status' => 'success',
+            'bill_info' => $results[0][0] ?? null,
             'bill_packinglist' => $packingList,
-            'bill_journey' => collect($results[2]),
-        ];
-
-
-        echo json_encode($result);
+            'bill_journey' => collect($results[2] ?? []),
+        ]);
     }
 }

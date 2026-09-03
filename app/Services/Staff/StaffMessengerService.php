@@ -13,15 +13,29 @@ class StaffMessengerService extends StaffBaseService implements StaffBaseService
 {
     public function getChatBox($request)
     {
-        $listChat = ChatBoxDetail::select("*")->with(['chatBox' => function($chatBox) {
-            $chatBox->with(['user' => function($user) {
-                $user->with('profile');
-            }]);
-        }, 'user'])->whereHas('user', function($user) use ($request) {
-            if(isset($request['email'])) $user->where('email', 'like', '%'.$request['email'].'%');
-        })->orderByDesc('created_at')->get();
-    
-        return $listChat->unique('chat_box_id')->values()->all();
+        // Latest message id per chat box (avoids loading entire chat history into memory)
+        $latestIds = ChatBoxDetail::query()
+            ->selectRaw('MAX(id) as id')
+            ->when(isset($request['email']), function ($q) use ($request) {
+                $q->whereHas('user', function ($user) use ($request) {
+                    $user->where('email', 'like', '%' . $request['email'] . '%');
+                });
+            })
+            ->groupBy('chat_box_id')
+            ->pluck('id');
+
+        if ($latestIds->isEmpty()) {
+            return [];
+        }
+
+        return ChatBoxDetail::with([
+            'chatBox.user.profile',
+            'user',
+        ])
+            ->whereIn('id', $latestIds)
+            ->orderByDesc('created_at')
+            ->get()
+            ->all();
     }
 
     public function update($request) 

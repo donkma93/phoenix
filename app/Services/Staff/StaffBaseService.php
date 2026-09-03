@@ -19,8 +19,10 @@ class StaffBaseService implements StaffBaseServiceInterface
             $users->where('role', config('auth.role.user'));
         })->where('status', '=', UserRequest::STATUS_NEW)->count();
 
-        $listChat = ChatBoxDetail::select("*")->where('staff_get', 0)->orderByDesc('created_at')->get();
-        $totalMessage = count($listChat->unique('chat_box_id')->values()->all());
+        // COUNT DISTINCT avoids loading every unread message into memory
+        $totalMessage = (int) ChatBoxDetail::where('staff_get', 0)
+            ->selectRaw('COUNT(DISTINCT chat_box_id) as aggregate')
+            ->value('aggregate');
 
         return [ 
             'request' => $totalUsersRequest,
@@ -29,15 +31,15 @@ class StaffBaseService implements StaffBaseServiceInterface
     }
 
     function getAllWarehouseArea() {
-        $warehouseAreas = WarehouseArea::all();
-
-        return $warehouseAreas;
+        return WarehouseArea::select('id', 'name', 'barcode', 'is_full')->get();
     }
 
     function getAllUser() {
-        $users = User::where('role', config('auth.role.user'))->get();
-        
-        return $users;
+        // Only columns needed for dropdowns / suggest boxes (not password, tokens, etc.)
+        return User::where('role', config('auth.role.user'))
+            ->select('id', 'email', 'partner_code', 'partner_id')
+            ->orderBy('email')
+            ->get();
     }
 
     function generateBarcodeNumber($barcodeList, $name, $number)

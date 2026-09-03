@@ -24,56 +24,61 @@ class UserPickupRequestService extends UserBaseService implements UserBaseServic
         $date_from = $request['date_from'] ?? date('Y-m-d', strtotime('-1 month'));
         $date_to = $request['date_to'] ?? date('Y-m-d');
 
-        $user = User::find(Auth::id());
         $pickups = PickupRequest::orderBy('created_at', 'DESC')->with('warehouses');
 
-        if($date_from) {
+        if ($date_from) {
             $pickups = $pickups->where('created_date', '>=', date('Y-m-d 00:00:00', strtotime($date_from)));
         }
 
-        if($date_to) {
+        if ($date_to) {
             $pickups = $pickups->where('created_date', '<=', date('Y-m-d 23:59:59', strtotime($date_to)));
         }
 
-        //$pickups = $pickups->paginate();
+        // Keep full list in date range (view uses client DataTable; pagination links are commented out)
         $pickups = $pickups->get();
 
-        foreach ($pickups as $pickup) {
-            $orderJourneys = OrderJourney::orderBy('created_at', 'DESC')->with([
-                'pickupRequest'
-            ])
-                ->where('id_pickup_request', '=', $pickup->id)
-                ->where('inout_type', '=', OrderJourney::INOUT_TYPE_CREATED)
-                ->get()
-                ->toArray();
-
-
-            $totalKG = 0;
-            $user_id = '';
-            $user_name ='';
-            foreach ($orderJourneys as $key => $orderJourney) {
-
-
-                $order = Order::orderBy('created_at', 'ASC')->with([
-                    'orderPackage'
-                ])->find($orderJourney['order_id']);
-
-                if (!!$order) {
-                    $user_id = $order->user_id;
-                    $user_name = $orderJourney['created_username'];
-                    $totalKG = $totalKG + $order->orderPackage->weight;
-                } else {
-                    // dd($orderJourney,$order);
-                    Log::info('ORDER_JOURNEY_ERROR: ' . json_encode($orderJourney));
-                    unset($orderJourneys[$key]);
-                }
-            }
-            $pickup['created_username'] = $user_name;
-            $pickup['user_id'] = $user_id;
-            $pickup['orderJourneys'] = $orderJourneys;
-            $pickup['totalKG'] = $totalKG;
+        $pickupIds = $pickups->pluck('id')->all();
+        if (count($pickupIds) === 0) {
+            return ['pickups' => $pickups];
         }
 
+        // Batch-load journeys + orders (same data as before, without N+1 queries)
+        $journeysByPickup = OrderJourney::orderBy('created_at', 'DESC')
+            ->whereIn('id_pickup_request', $pickupIds)
+            ->where('inout_type', OrderJourney::INOUT_TYPE_CREATED)
+            ->get()
+            ->groupBy('id_pickup_request');
+
+        $orderIds = $journeysByPickup->flatten()->pluck('order_id')->filter()->unique()->values()->all();
+        $ordersById = empty($orderIds)
+            ? collect()
+            : Order::with('orderPackage')
+                ->whereIn('id', $orderIds)
+                ->get()
+                ->keyBy('id');
+
+        foreach ($pickups as $pickup) {
+            $orderJourneys = ($journeysByPickup->get($pickup->id) ?? collect())->values();
+            $totalKG = 0;
+            $user_id = '';
+            $user_name = '';
+            $filtered = [];
+
+            foreach ($orderJourneys as $orderJourney) {
+                $order = $ordersById->get($orderJourney->order_id);
+                if ($order) {
+                    $user_id = $order->user_id;
+                    $user_name = $orderJourney->created_username;
+                    $totalKG += optional($order->orderPackage)->weight ?? 0;
+                    $filtered[] = $orderJourney->toArray();
+                }
+            }
+
+            $pickup['created_username'] = $user_name;
+            $pickup['user_id'] = $user_id;
+            $pickup['orderJourneys'] = $filtered;
+            $pickup['totalKG'] = $totalKG;
+        }
 
         return [
             'pickups' => $pickups,
@@ -266,27 +271,33 @@ class UserPickupRequestService extends UserBaseService implements UserBaseServic
 
     public function pickupScanOrder($pickup_id, $order_id)
     {
+        $pickup = PickupRequest::where('id', $pickup_id)->orWhere('pickup_code', $pickup_id)->first();
 
-        $checkpickup = PickupRequest::where('id', $pickup_id)->orWhere('pickup_code', $pickup_id)
-        ->get()
-        ->toArray();
-
-        if (count($checkpickup) <= 0){
+        if (!$pickup) {
             return [
                 'message_code' => 'PICKUP_NOT_FOUND',
                 'message_text' => 'pickup request not found',
             ];
         }
 
-        $pickup = PickupRequest::where('id', $pickup_id)->orWhere('pickup_code', $pickup_id)
-        ->first();
-        $checkOrderIdOut = OrderJourney::where('id_pickup_request', $pickup->id)
-            ->where('order_code', $order_id)
-            ->where('inout_type', OrderJourney::INOUT_TYPE_CREATED)
-            ->get()
-            ->toArray();
+        // Resolve order by id or order_code first, then match journey by both fields
+        $order = Order::where('id', $order_id)->orWhere('order_code', $order_id)->first();
+        if (!$order) {
+            return [
+                'message_code' => 'ORDER_NOT_IN_PICKUP',
+                'message_text' => 'Order not found',
+            ];
+        }
 
-        if (count($checkOrderIdOut) <= 0) {
+        $checkOrderIdOut = OrderJourney::where('id_pickup_request', $pickup->id)
+            ->where('inout_type', OrderJourney::INOUT_TYPE_CREATED)
+            ->where(function ($q) use ($order) {
+                $q->where('order_id', $order->id)
+                    ->orWhere('order_code', $order->order_code);
+            })
+            ->exists();
+
+        if (!$checkOrderIdOut) {
             return [
                 'message_code' => 'ORDER_NOT_IN_PICKUP',
                 'message_text' => 'Order not found',
@@ -294,19 +305,20 @@ class UserPickupRequestService extends UserBaseService implements UserBaseServic
         }
 
         $checkScan = OrderJourney::where('id_pickup_request', $pickup->id)
-            ->where('order_code', $order_id)
             ->where('inout_type', OrderJourney::INOUT_TYPE_PICKED)
-            ->get()
-            ->toArray();
+            ->where(function ($q) use ($order) {
+                $q->where('order_id', $order->id)
+                    ->orWhere('order_code', $order->order_code);
+            })
+            ->exists();
 
-        if (count($checkScan) > 0) {
+        if ($checkScan) {
             return [
                 'message_code'=> "DUPLICATED",
                 'message_text'=> "Order duplicated"
             ];
         }
         $now = Carbon::now();
-        $order = Order::where('id', $order_id)->orWhere('order_code', $order_id)->first();
         $user = User::find(Auth::id());
 
         $order_journey = [
@@ -317,7 +329,7 @@ class UserPickupRequestService extends UserBaseService implements UserBaseServic
             'inout_type' => OrderJourney::INOUT_TYPE_PICKED,
             'created_date' => $now,
             'order_code'=> $order->order_code,
-            'created_username' => $user->email
+            'created_username' => $user ? $user->email : null,
         ];
         OrderJourney::create($order_journey);
 
@@ -376,20 +388,27 @@ class UserPickupRequestService extends UserBaseService implements UserBaseServic
 
     public function list()
     {
-        $pickups = PickupRequest::orderBy('created_at', 'DESC')->get();
+        // Staff API: active pickups only (not entire history dump)
+        $pickups = PickupRequest::orderBy('created_at', 'DESC')
+            ->whereIn('status', [PickupRequest::NEW, PickupRequest::PICKING])
+            ->limit(200)
+            ->get();
 
-        if (count($pickups) <= 0) {
+        if ($pickups->isEmpty()) {
             return [
                 'pickups' => [],
             ];
         }
 
+        $pickupIds = $pickups->pluck('id')->all();
+        $counts = OrderJourney::whereIn('id_pickup_request', $pickupIds)
+            ->where('inout_type', OrderJourney::INOUT_TYPE_CREATED)
+            ->selectRaw('id_pickup_request, COUNT(*) as c')
+            ->groupBy('id_pickup_request')
+            ->pluck('c', 'id_pickup_request');
+
         foreach ($pickups as $pickup) {
-            $orderJourneys = OrderJourney::where('id_pickup_request', '=', $pickup->id)
-                ->where('inout_type', OrderJourney::INOUT_TYPE_CREATED)
-                ->get()
-                ->toArray();
-            $pickup['orders_count'] = count($orderJourneys);
+            $pickup['orders_count'] = (int) ($counts[$pickup->id] ?? 0);
         }
 
         return [

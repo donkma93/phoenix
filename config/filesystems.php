@@ -54,12 +54,6 @@ return [
             'throw' => true,
         ],
 
-        'g7_upload' => [
-            'driver' => 'local',
-            'path' => '/documents/g7',
-            'root' => public_path() . '/documents/g7',
-        ],
-
     ],
 
     /*

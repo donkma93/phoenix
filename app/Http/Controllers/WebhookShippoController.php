@@ -10,37 +10,51 @@ class WebhookShippoController extends Controller
 {
     /**
      * @param Request $request
-     * @return json
+     * @return \Illuminate\Http\JsonResponse
      */
     public function handle_data(Request $request)
     {
-        Log::info('----------START LOG WEBHOOK SHIPPO----------: \n' . $request->getContent());
+        Log::info('----------START LOG WEBHOOK SHIPPO----------');
 
         $data = json_decode($request->getContent());
-        $p_code = $data->data->tracking_number; //tracking number carrier (ups,...)
-        $p_provider = $data->data->carrier;
-        $tracking_status = $data->data->tracking_status->status ?? 'Unknown';
-        $list_tracking_status = config('app.tracking_status');
-        foreach ($list_tracking_status as $k=>$v) {
-            if (strtolower($v) === strtolower($tracking_status)) {
-                $tracking_status = $k;
+        if (!$data || !isset($data->data->tracking_number)) {
+            return response()->json(['status' => 'error', 'message' => 'Invalid payload'], 422);
+        }
+
+        $p_code = $data->data->tracking_number;
+        $p_provider = $data->data->carrier ?? null;
+        $tracking_status_label = $data->data->tracking_status->status ?? 'Unknown';
+
+        // Map label → code for storage on order_transactions.tracking_status (NOT picking_status)
+        $list_tracking_status = config('app.tracking_status', []);
+        $tracking_status_code = null;
+        foreach ($list_tracking_status as $k => $v) {
+            if (strtolower((string) $v) === strtolower((string) $tracking_status_label)) {
+                $tracking_status_code = $k;
+                break;
             }
         }
 
-        // Cập nhật lại tracking status (dùng lại cột picking_status để lưu tracking status -> lamdt)
         try {
-            Log::info('----------LOG WEBHOOK SHIPPO---------- (1)');
-            $rs = DB::select("select order_id, label_url from order_transactions where tracking_number = '$p_code' and shipping_provider = 'SHIPPO'");
+            // Prepared statement — no string interpolation
+            $rs = DB::select(
+                'SELECT order_id, label_url FROM order_transactions WHERE tracking_number = ? AND shipping_provider = ?',
+                [$p_code, 'SHIPPO']
+            );
+
             $order_id = null;
             $label_url = null;
-            if (!!$rs && is_int($tracking_status)) {
+            if (!empty($rs)) {
                 $order_id = $rs[0]->order_id;
                 $label_url = $rs[0]->label_url;
 
-                DB::table('orders')
-                    ->where('id', '=', $order_id)
+                // Update tracking on transaction table only — do not overwrite warehouse picking_status
+                DB::table('order_transactions')
+                    ->where('order_id', $order_id)
+                    ->where('tracking_number', $p_code)
                     ->update([
-                        'picking_status' => $tracking_status
+                        'tracking_status' => $tracking_status_label,
+                        'updated_at' => now(),
                     ]);
             }
 
@@ -49,91 +63,72 @@ class WebhookShippoController extends Controller
                     ->select('u.webhook_url', 'o.order_number')
                     ->join('orders as o', 'u.id', 'o.user_id')
                     ->where('o.id', $order_id)
-                    ->where('u.deleted_at', null)
-                    ->where('o.deleted_at', null)
+                    ->whereNull('u.deleted_at')
+                    ->whereNull('o.deleted_at')
                     ->first();
 
-                if ($resultData) {
+                if ($resultData && !empty($resultData->webhook_url)) {
                     $data->customers_order = $resultData->order_number;
                     $data->label_url = $label_url;
                     try {
                         $curl = curl_init();
-
-                        curl_setopt_array($curl, array(
+                        curl_setopt_array($curl, [
                             CURLOPT_URL => $resultData->webhook_url,
                             CURLOPT_RETURNTRANSFER => true,
-                            CURLOPT_ENCODING => '',
-                            CURLOPT_MAXREDIRS => 10,
-                            CURLOPT_TIMEOUT => 0,
+                            CURLOPT_TIMEOUT => 10,
                             CURLOPT_FOLLOWLOCATION => true,
-                            CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
                             CURLOPT_CUSTOMREQUEST => 'POST',
                             CURLOPT_POSTFIELDS => json_encode($data),
-                            CURLOPT_HTTPHEADER => array(
-                                'Content-Type: application/json'
-                            ),
-                        ));
-
+                            CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+                        ]);
                         $response = curl_exec($curl);
-
                         curl_close($curl);
-                        //echo $response;
-                        Log::info("OrderID: " . $order_id);
-                        Log::info('Webhook Url: ' . $resultData->webhook_url);
-                        Log::info($response);
-
+                        Log::info('Shippo forward webhook', [
+                            'order_id' => $order_id,
+                            'response' => $response,
+                        ]);
                     } catch (\Exception $e) {
-                        Log::error($e->getMessage());
+                        Log::error('Shippo forward webhook failed: ' . $e->getMessage());
                     }
-
                 }
             }
-            Log::info('----------LOG WEBHOOK SHIPPO---------- (2)');
         } catch (\Exception $e) {
-            Log::error('----------LOG WEBHOOK SHIPPO---------- (3) Exception: ' . json_encode($e));
+            Log::error('Webhook Shippo exception: ' . $e->getMessage());
         }
 
+        try {
+            $results = DB::select('call webhook_info_shippo(?,?)', [
+                $p_code,
+                $p_provider,
+            ]);
 
-        // Kiểm tra hành trình xem đã tồn tại chưa, và trả về số lượng hành trình
-        // { CALL phoenix.webhook_info_shippo(:p_code,:p_provider) }
-        $results = DB::select('call webhook_info_shippo(?,?)', [
-            $p_code,
-            $p_provider
-        ]);
-
-        //echo $results[0]->COUNT;
-
-        // Nếu có hành trình hoặc hành trình thay đổi thì cập nhật hành trình
-        if (isset($results[0]->COUNT)) {
-            Log::info('----------LOG WEBHOOK SHIPPO---------- (4)');
-            $count_events_inserted = $results[0]->COUNT;
-            $total_current_events = $data->data->tracking_history;
-            $total_current_events = array_reverse($total_current_events);
-            for ($i = 0; $i < count($total_current_events) - $count_events_inserted; $i++) {
-                $event = $total_current_events[$i];
-
-                $p_bill_ref = $p_code;
-                $p_status = $event->status;
-                $p_note = $event->status_details;
-                $p_location = $event->location->city . ', ' . $event->location->state . ', ' . $event->location->country;
-                $p_city = $event->location->city;
-                $p_country = $event->location->country;
-                $p_date_journey = date('Y-m-d H:i:s', strtotime($event->status_date));
-
-                // { CALL phoenix.webhook_trackupdate_shippo(:p_bill_ref,:p_status,:p_note,:p_location,:p_city,:p_country,:p_date_journey) }
-                $rs = DB::select("call webhook_trackupdate_shippo(?,?,?,?,?,?,?)", [
-                    $p_bill_ref,
-                    $p_status,
-                    $p_note,
-                    $p_location,
-                    $p_city,
-                    $p_country,
-                    $p_date_journey
-                ]);
+            if (isset($results[0]->COUNT) && isset($data->data->tracking_history) && is_array($data->data->tracking_history)) {
+                $count_events_inserted = (int) $results[0]->COUNT;
+                $total_current_events = array_reverse($data->data->tracking_history);
+                $toInsert = count($total_current_events) - $count_events_inserted;
+                for ($i = 0; $i < $toInsert; $i++) {
+                    $event = $total_current_events[$i];
+                    $location = $event->location ?? null;
+                    $p_location = $location
+                        ? (($location->city ?? '') . ', ' . ($location->state ?? '') . ', ' . ($location->country ?? ''))
+                        : '';
+                    DB::select('call webhook_trackupdate_shippo(?,?,?,?,?,?,?)', [
+                        $p_code,
+                        $event->status ?? null,
+                        $event->status_details ?? null,
+                        $p_location,
+                        $location->city ?? null,
+                        $location->country ?? null,
+                        isset($event->status_date) ? date('Y-m-d H:i:s', strtotime($event->status_date)) : null,
+                    ]);
+                }
             }
-            Log::info('----------END LOG WEBHOOK SHIPPO----------');
+        } catch (\Exception $e) {
+            Log::error('Webhook Shippo history exception: ' . $e->getMessage());
         }
 
-        exit('End');
+        Log::info('----------END LOG WEBHOOK SHIPPO----------');
+
+        return response()->json(['status' => 'ok']);
     }
 }

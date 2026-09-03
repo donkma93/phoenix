@@ -45,37 +45,27 @@ class StaffOrderController extends StaffBaseController
             $input_data = $request->all();
             $date_from = $input_data['date_from'] ?? date('Y-m-d', strtotime('-1 month'));
             $date_to = $input_data['date_to'] ?? date('Y-m-d');
-            $order_status = $input_data['bill_status'] ?? 99; // 99 là lấy tất cả
+            $order_status = $input_data['bill_status'] ?? 99; // 99 = all
 
-            $data = $this->orderService->list($input_data);
+            // Suggest box needs id + email only (same UX as before; lighter than full User models)
+            $users = User::where('role', User::ROLE_USER)
+                ->select('id', 'email')
+                ->orderBy('email')
+                ->get();
 
-            $new_data['emails'] = User::where('role', User::ROLE_USER)->pluck('email')->toArray();
-            $new_data['users'] = User::where('role', User::ROLE_USER)->get();
+            $count_status = $this->orderService->getOrderStatusCounts($date_from, $date_to);
+            // Empty-state flag only; rows are loaded by DataTable AJAX (same as before)
+            $hasOrders = $this->orderService->hasOrdersInRange($date_from, $date_to, $order_status);
 
-            [$count_order_status, $list_orders] = Functions::CallRaw('order_list_staff', [
-                $date_from,
-                $date_to,
-                $order_status
-            ]);
-
-            $new_data['orders'] = $list_orders;
-            $count_status = [];
-
-            if (!!$count_order_status) {
-                foreach ($count_order_status as $v) {
-                    $count_status[$v->picking_status] = $v->count;
-                }
-            }
-
-            $data['tracking_status'] = config('app.tracking_status');
-            $data['count_status'] = $count_status;
-
-            $new_data['tracking_status'] = config('app.tracking_status');
-            $new_data['count_status'] = $count_status;
             $request->flash();
 
-//            return view('order.list', $data);
-            return view('order.list', $new_data);
+            return view('order.list', [
+                'emails' => $users->pluck('email')->values()->all(),
+                'users' => $users,
+                'orders' => $hasOrders ? [1] : [],
+                'tracking_status' => config('app.tracking_status'),
+                'count_status' => $count_status,
+            ]);
         } catch (Exception $e) {
             Log::error($e);
             //TODO redirect to error page
@@ -89,59 +79,30 @@ class StaffOrderController extends StaffBaseController
             $input_data = $request->all();
             $date_from = $input_data['date_from'] ?? date('Y-m-d', strtotime('-1 month'));
             $date_to = $input_data['date_to'] ?? date('Y-m-d');
-            $order_status = $input_data['bill_status'] ?? 99; // 99 là lấy tất cả
+            $order_status = $input_data['bill_status'] ?? 99; // 99 = all
 
-            $draw = intval($request->input('draw')); // DataTables draw counter
+            $draw = intval($request->input('draw'));
             $start = intval($request->input('start', 0));
             $length = intval($request->input('length', 50));
-            if ($length <= 0) { $length = 50; }
+            if ($length <= 0) {
+                $length = 50;
+            }
+            // Cap page size so a single AJAX call cannot load the entire dataset
+            $length = min($length, 100);
+
             $searchValue = trim($request->input('search.value', ''));
 
-            [$count_order_status, $list_orders] = \App\Helpers\Functions::CallRaw('order_list_staff', [
+            // True SQL LIMIT/OFFSET pagination â€” never load the full date-range into PHP memory
+            $result = $this->orderService->listForDataTable(
                 $date_from,
                 $date_to,
-                $order_status
-            ]);
+                $order_status,
+                $searchValue,
+                $start,
+                $length
+            );
 
-            $all = collect($list_orders ?? []);
-
-            $recordsTotal = $all->count();
-
-				if ($searchValue !== '') {
-					$terms = array_values(array_filter(array_map('trim', explode(',', $searchValue)), function($v){ return $v !== ''; }));
-					if (count($terms) === 0) {
-						$terms = [$searchValue];
-					}
-					$all = $all->filter(function ($row) use ($terms) {
-						$fields = [
-							isset($row->order_code) ? (string)$row->order_code : '',
-							isset($row->order_number) ? (string)$row->order_number : '',
-							isset($row->user_email) ? (string)$row->user_email : '',
-							isset($row->partner_code) ? (string)$row->partner_code : '',
-							isset($row->name) ? (string)$row->name : '',
-							isset($row->addr) ? (string)$row->addr : '',
-							isset($row->zip) ? (string)$row->zip : '',
-							isset($row->tracking_number) ? (string)$row->tracking_number : '',
-							isset($row->provider) ? (string)$row->provider : '',
-							isset($row->item) ? (string)$row->item : '',
-						];
-						foreach ($terms as $t) {
-							if ($t === '') { continue; }
-							foreach ($fields as $val) {
-								if ($val !== '' && stripos($val, $t) !== false) {
-									return true;
-								}
-							}
-						}
-						return false;
-					});
-				}
-
-            $recordsFiltered = $all->count();
-
-            $paged = $all->slice($start, $length);
-
-            $data = $paged->map(function ($order) {
+            $data = collect($result['rows'])->map(function ($order) {
                 $checkbox = '<input type="checkbox" class="order-checkbox" value="' . ($order->id ?? '') . '">';
                 $customerHtml = '<div>' . e($order->order_number ?? '') . '</div>'
                     . '<div>' . e($order->user_email ?? '') . '</div>'
@@ -168,9 +129,11 @@ class StaffOrderController extends StaffBaseController
 
                 $previewBtn = '';
                 if (isset($order->label_url) && ($order->picking_status ?? null) != 5) {
-                    $labelUrl = asset($order->label_url);
-                    // Check if file is an image
-                    $extension = strtolower(pathinfo($order->label_url, PATHINFO_EXTENSION));
+                    // Support both relative paths and absolute MyIB/storage URLs
+                    $rawLabel = $order->label_url;
+                    $labelUrl = preg_match('#^https?://#i', $rawLabel) ? $rawLabel : asset($rawLabel);
+                    $pathForExt = parse_url($rawLabel, PHP_URL_PATH) ?: $rawLabel;
+                    $extension = strtolower(pathinfo($pathForExt, PATHINFO_EXTENSION));
                     $imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp'];
                     if (in_array($extension, $imageExtensions)) {
                         $previewBtn = '<button type="button" class="fmus01 btn btn-sm btn-round btn-success btn-block" data-toggle="modal" data-target="#preview-label" onclick="previewImage(`' . $labelUrl . '`)">Preview</button>';
@@ -228,8 +191,8 @@ class StaffOrderController extends StaffBaseController
 
             return response()->json([
                 'draw' => $draw,
-                'recordsTotal' => $recordsTotal,
-                'recordsFiltered' => $recordsFiltered,
+                'recordsTotal' => $result['recordsTotal'],
+                'recordsFiltered' => $result['recordsFiltered'],
                 'data' => $data,
             ]);
         } catch (Exception $e) {
@@ -341,7 +304,7 @@ class StaffOrderController extends StaffBaseController
                 $file = $request->file('file');
 
 
-                // Lưu trên host
+                // LÆ°u trÃªn host
                 // // File extension
                 // $extension = $file->getClientOriginalExtension();
                 // $fileName = str_replace(" ", "_", pathinfo($file->getClientOriginalName(), PATHINFO_FILENAME));
@@ -365,7 +328,7 @@ class StaffOrderController extends StaffBaseController
                 // //    $filepath = url($fileKey);
 
 
-                // Lưu trên S3
+                // LÆ°u trÃªn S3
                 // $ext = $file->extension();
                 // $extension = $file->getClientOriginalExtension();
                 // $old_name = $file->getClientoriginalName();
@@ -382,25 +345,25 @@ class StaffOrderController extends StaffBaseController
                 // //$data['filepath'] = $http_host . $fileKey;
                 // //$data['label_url'] = request()->getHost() . $fileKey;
                 // $data['extension'] = $extension;
-                $ext = $file->extension(); // Đuôi file theo mime-type
-$extension = $file->getClientOriginalExtension(); // Đuôi gốc
-$old_name = $file->getClientOriginalName(); // Tên gốc
+                $ext = $file->extension(); // ÄuÃ´i file theo mime-type
+$extension = $file->getClientOriginalExtension(); // ÄuÃ´i gá»‘c
+$old_name = $file->getClientOriginalName(); // TÃªn gá»‘c
 
-// Tạo tên file mới và folder
+// Táº¡o tÃªn file má»›i vÃ  folder
 $folder = 'uploads/PNX_LABEL/' . date('Ym');
 $cleaned_name = $this->clean_str($old_name, '/[^0-9a-zA-Z._-]/');
 $new_name = time() . '_' . rand(100000, 999999) . '_' . $cleaned_name;
 
-// Lưu file vào storage/app/public/...
+// LÆ°u file vÃ o storage/app/public/...
 $path = Storage::disk('public')->putFileAs($folder, $file, $new_name);
 
-// Tạo đường dẫn URL public
+// Táº¡o Ä‘Æ°á»ng dáº«n URL public
 $pathImg = asset('storage/' . $folder . '/' . $new_name);
 
-// Gọi service lưu DB
+// Gá»i service lÆ°u DB
 $this->orderService->saveOrderFileUrl($orderId, $pathImg);
 
-// Trả về client
+// Tráº£ vá» client
 $data['success'] = 1;
 $data['message'] = 'Uploaded Successfully!';
 $data['order_id'] = $orderId;
@@ -429,11 +392,11 @@ $data['extension'] = $extension;
         $result = $this->_uploadFiles($request);
         $dataObj = json_decode($result->getContent());
         if ($dataObj->success == 1) {
-            // Nếu upload file thành công
+            // Náº¿u upload file thÃ nh cÃ´ng
             $order_id = $dataObj->order_id;
             $filepath = $dataObj->filepath;
             $extension = $dataObj->extension;
-            // Đang định xử lý update filepath ở đây
+            // Äang Ä‘á»‹nh xá»­ lÃ½ update filepath á»Ÿ Ä‘Ã¢y
 
             $data = $result->getContent();
         } else {
@@ -483,78 +446,9 @@ $data['extension'] = $extension;
                 $tracking_provider = DB::table('order_transactions')->where('order_id', $order_id)->value('tracking_provider');
                 $providerLower = $provider ? strtolower($provider) : '';
 
+                // G7 integration removed — treat legacy G7 labels as local cleanup only
                 if ($providerLower === 'g7') {
-                    Log::error('========== LOG doDeleteLabel (3): tracking provider: ' . $tracking_provider);
-
-                    $curl = curl_init();
-                    curl_setopt_array($curl, array(
-                        CURLOPT_URL => 'https://g7logistics.com/agentapi/login',
-                        CURLOPT_RETURNTRANSFER => true,
-                        CURLOPT_ENCODING => '',
-                        CURLOPT_MAXREDIRS => 10,
-                        CURLOPT_TIMEOUT => 0,
-                        CURLOPT_FOLLOWLOCATION => true,
-                        CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
-                        CURLOPT_CUSTOMREQUEST => 'POST',
-                        CURLOPT_POSTFIELDS => '{
-                    "email": "' . config('app.g7_email') . '",
-                    "password": "' . config('app.g7_password') . '"
-                }',
-                        CURLOPT_HTTPHEADER => array(
-                            'Content-Type: application/json'
-                        ),
-                    ));
-                    $response = curl_exec($curl);
-                    Log::error('========== LOG doDeleteLabel (4): ' . json_encode($response));
-                    curl_close($curl);
-
-                    $isLogin = (json_decode($response))->succeeded ?? false;
-
-                    if ($isLogin === true) {
-                        Log::error('========== LOG doDeleteLabel (5)');
-                        $token = (json_decode($response))->data->token;
-
-                        $curl = curl_init();
-
-                        curl_setopt_array($curl, array(
-                            CURLOPT_URL => 'https://g7logistics.com/agentapi/delete-order/' . $tracking_provider,
-                            CURLOPT_RETURNTRANSFER => true,
-                            CURLOPT_ENCODING => '',
-                            CURLOPT_MAXREDIRS => 10,
-                            CURLOPT_TIMEOUT => 0,
-                            CURLOPT_FOLLOWLOCATION => true,
-                            CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
-                            CURLOPT_CUSTOMREQUEST => 'DELETE',
-                            CURLOPT_POSTFIELDS => '',
-                            CURLOPT_HTTPHEADER => array(
-                                'Content-Type: application/json',
-                                'Authorization: Bearer ' . $token
-                            ),
-                        ));
-
-                        $response = curl_exec($curl);
-
-                        curl_close($curl);
-                        Log::error('========== LOG doDeleteLabel (6): ' . json_encode($response));
-
-                        if ((json_decode($response))->succeeded === true) {
-                            $deleteSuccess = true;
-                        } else {
-                            $result = [
-                                'status' => 'error',
-                                'message' => 'Remove label failed, please check API!'
-                            ];
-                        }
-
-                    } else {
-                        Log::error('========== LOG doDeleteLabel (7): Login G7 API failed!');
-                        $result = [
-                            'status' => 'error',
-                            'message' => 'Login G7 API failed!'
-                        ];
-
-                        return $result;
-                    }
+                    $deleteSuccess = true;
                 } elseif ($providerLower === 'shippo') {
                     try {
                         $transaction_id = DB::table('order_transactions')->where('order_id', $order_id)->value('transaction_id');
@@ -605,6 +499,11 @@ $data['extension'] = $extension;
                 }
 
                 if ($deleteSuccess) {
+                    // Capture local label path before deleting the DB row, then free disk
+                    $labelUrl = DB::table('order_transactions')
+                        ->where('order_id', $order_id)
+                        ->value('label_url');
+
                     DB::table('order_transactions')->where('order_id', $order_id)->delete();
 
                     DB::table('order_rates')->where('order_id', $order_id)->delete();
@@ -616,6 +515,10 @@ $data['extension'] = $extension;
                         ]);
 
                     DB::commit();
+
+                    if ($labelUrl) {
+                        deleteLocalMediaFile($labelUrl);
+                    }
 
                     $result = [
                         'status' => 'success',
@@ -851,30 +754,6 @@ $data['extension'] = $extension;
         }
     }
 
-    public function importLabelG7(Request $request)
-    {
-        try {
-            $data = $this->orderService->storeExcelG7(request()->file('label_file'), $request->all());
-
-            if (!$data['isValid']) {
-                return back()
-                    ->with('error', $data['message'] ?? '')
-                    ->with('csvErrorsG7', $data['errors'] ?? []);
-            }
-
-            if (count($data['ordersError']) > 0) {
-                Log::warning('IMPORT LABELS FAILED: ' . implode(', ', $data['ordersError']));
-
-                return redirect()->route('staff.orders.list')->with('warning', 'Create failed: ' . implode(', ', $data['ordersError']));
-            }
-
-            return redirect()->route('staff.orders.list')->with('success', "Create labels successful");
-        } catch (Exception $e) {
-            Log::error($e);
-
-            return redirect()->route('staff.orders.list')->with('error', "Create labels failed");
-        }
-    }
 
     public function importLabelShippo(Request $request)
     {
@@ -1045,339 +924,20 @@ $data['extension'] = $extension;
     {
         try {
             $data = $this->orderService->createLabelPdaApi($request);
-            if ($data['message_code'] != 'SUCCESS') {
-                return response($data, 400);
+            if (($data['message_code'] ?? null) != 'SUCCESS') {
+                return response()->json($data, 400);
             }
-            return $data;
+            return response()->json($data);
         } catch (Exception $e) {
             Log::error($e);
-            //TODO redirect to error page
-            // abort(500);
 
-            return response([
+            return response()->json([
                 'message_code' => 'UNEXPECTED_ERROR',
                 'message_text' => $e->getMessage()
             ], 400);
         }
     }
 
-    public function createLabelG7(Request $request)
-    {
-        $request->validate([
-            'shipping_street' => ['required', 'max:35'],
-            'shipping_address1' => ['nullable', 'max:35'],
-            'shipping_address2' => ['nullable', 'max:35'],
-        ]);
-
-
-        Log::error('============ LOG START createLabelG7 Order code: ' . $request->get('order_code') . ' ============================================================');
-        try {
-            Log::error('===== LOG createLabelG7 (1)');
-
-            // Gọi API Login
-            $curl = curl_init();
-            curl_setopt_array($curl, array(
-                CURLOPT_URL => 'https://g7logistics.com/agentapi/login',
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_ENCODING => '',
-                CURLOPT_MAXREDIRS => 10,
-                CURLOPT_TIMEOUT => 0,
-                CURLOPT_FOLLOWLOCATION => true,
-                CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
-                CURLOPT_CUSTOMREQUEST => 'POST',
-                CURLOPT_POSTFIELDS => '{
-                    "email": "' . config('app.g7_email') . '",
-                    "password": "' . config('app.g7_password') . '"
-                }',
-                CURLOPT_HTTPHEADER => array(
-                    'Content-Type: application/json'
-                ),
-            ));
-            $response = curl_exec($curl);
-
-            Log::error('===== LOG createLabelG7 (2): ' . json_encode($response));
-            curl_close($curl);
-
-            $isLogin = (json_decode($response))->succeeded ?? false;
-
-            if ($isLogin === true) { // Nếu login thành công
-                Log::error('===== LOG createLabelG7 (3)');
-                $token = (json_decode($response))->data->token;
-                $data = $request->input();
-                $orderDate = gmdate('Y-m-d\TH:i:s.u\Z');
-
-                //Quy đổi kích thước sang cm và trọng lượng sang kg
-                if ($data['size_type'] == 1) { // inch to cm
-                    $data['package_height_new'] = $data['package_height'] * 2.54;
-                    $data['package_length_new'] = $data['package_length'] * 2.54;
-                    $data['package_width_new'] = $data['package_width'] * 2.54;
-                } else {
-                    $data['package_height_new'] = $data['package_height'] * 1;
-                    $data['package_length_new'] = $data['package_length'] * 1;
-                    $data['package_width_new'] = $data['package_width'] * 1;
-                }
-
-                if ($data['weight_type'] == 1) { // Lb to kg
-                    $data['package_weight_new'] = $data['package_weight'] * 0.45359237;
-                } else { // Oz to kg
-                    $data['package_weight_new'] = $data['package_weight'] * 0.0283495231;
-                }
-
-
-                $curl = curl_init();
-
-                $remarks = '';
-                if (Auth::user()->email !== null && Auth::user()->email === 'kinhdoanh1@wce.vn') {
-                    $remarks = 'WCE';
-                }
-
-                $body_data = '{
-                      "shipmentId": "",
-                      "order": {
-                        "no": "",
-                        "orderDate": "' . $orderDate . '",
-                        "sender_companyName": "' . trim($data['shipping_company'], "' \"") . '",
-                        "sender_name": "' . trim($data['shipping_name'], "' \"") . '",
-                        "sender_givename": "",
-                        "sender_address1": "' . trim($data['shipping_street'], "' \"") . '",
-                        "sender_address2": "' . trim($data['shipping_address1'], "' \"") . '",
-                        "sender_address3": "' . trim($data['shipping_address2'], "' \"") . '",
-                        "sender_city": "' . trim($data['shipping_city'], "' \"") . '",
-                        "sender_district": "",
-                        "sender_country": "' . trim($data['shipping_country'], "' \"") . '",
-                        "sender_postCode": "' . trim($data['shipping_zip'], "' \"") . '",
-                        "sender_phone": "' . trim($data['shipping_phone'], "' \"") . '",
-                        "sender_email": "",
-                        "sender_state": "' . trim($data['shipping_province'], "' \"") . '",
-                        "consignee_companyName": "' . trim($data['receiver_company'], "' \"") . '",
-                        "consignee_name": "' . trim($data['receiver_name'], "' \"") . '",
-                        "consignee_givename": "",
-                        "consignee_address1": "' . trim($data['receiver_street'], "' \"") . '",
-                        "consignee_address2": "' . trim($data['receiver_address1'], "' \"") . '",
-                        "consignee_address3": "' . trim($data['receiver_address2'], "' \"") . '",
-                        "consignee_city": "' . trim($data['receiver_city'], "' \"") . '",
-                        "consignee_state": "' . trim($data['receiver_province'], "' \"") . '",
-                        "consignee_district": "",
-                        "consignee_country": "' . trim($data['receiver_country'], "' \"") . '",
-                        "consignee_postCode": "' . trim($data['receiver_zip'], "' \"") . '",
-                        "consignee_phone": "' . trim($data['receiver_phone'], "' \"") . '",
-                        "consignee_email": "",
-                        "packageDesc": "",
-                        "serviceId": 11,
-                        "kindOfGood": 0,
-                        "packages": [
-                          {
-                            "netWeight": ' . $data['package_weight_new'] . ',
-                            "height": ' . $data['package_height_new'] . ',
-                            "length": ' . $data['package_length_new'] . ',
-                            "width": ' . $data['package_width_new'] . '
-                          }
-                        ],
-                        "goods": [
-                          {
-                            "descriptionGood": "' . addslashes($data['item_name']) . '",
-                            "value": ' . rand(30, 50) . ',
-                            "curValId": "USD",
-                            "countryoforigin": "VN",
-                            "sku": "",
-                            "itemQuantity": 1,
-                            "hscode": "73269099",
-                            "packNo": 0,
-                            "netWeight": ' . $data['package_weight_new'] . '
-                          }
-                        ],
-                        "deliveryDate": "' . $orderDate . '",
-                        "deliveryTime": "",
-                        "remarks": "' . $remarks . '",
-                        "phoneContact": "",
-                        "bookingCode": "",
-                        "isValid": true,
-                        "notImport": true,
-                        "sMessage": "",
-                        "orderNo": "",
-                        "storeAddress": ""
-                      }
-                    }';
-
-                curl_setopt_array($curl, array(
-                    CURLOPT_URL => 'https://g7logistics.com/agentapi/add-edit-order',
-                    CURLOPT_RETURNTRANSFER => true,
-                    CURLOPT_ENCODING => '',
-                    CURLOPT_MAXREDIRS => 10,
-                    CURLOPT_TIMEOUT => 0,
-                    CURLOPT_FOLLOWLOCATION => true,
-                    CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
-                    CURLOPT_CUSTOMREQUEST => 'POST',
-                    CURLOPT_POSTFIELDS => $body_data,
-                    CURLOPT_HTTPHEADER => array(
-                        'Content-Type: application/json',
-                        'Authorization: Bearer ' . $token
-                    ),
-                ));
-
-                $response = curl_exec($curl);
-
-                Log::error('===== LOG createLabelG7 (4): ' . json_encode($response));
-                curl_close($curl);
-
-                $response_status = json_decode($response)->succeeded ?? false;
-
-                // Nếu tạo mã thành công thì sẽ cập nhật dữ liệu
-                if ($response_status === true) {
-                    Log::error('===== LOG createLabelG7 (5)');
-                    $shipmentId = json_decode($response)->data->shipmentId;
-                    // Gọi api đăng ký bill với G7
-                    $curl = curl_init();
-
-                    curl_setopt_array($curl, array(
-                        CURLOPT_URL => 'https://g7logistics.com/agentapi/send-order',
-                        CURLOPT_RETURNTRANSFER => true,
-                        CURLOPT_ENCODING => '',
-                        CURLOPT_MAXREDIRS => 10,
-                        CURLOPT_TIMEOUT => 0,
-                        CURLOPT_FOLLOWLOCATION => true,
-                        CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
-                        CURLOPT_CUSTOMREQUEST => 'POST',
-                        CURLOPT_POSTFIELDS => '["' . $shipmentId . '"]',
-                        CURLOPT_HTTPHEADER => array(
-                            'Content-Type: application/json',
-                            'Authorization: Bearer ' . $token
-                        ),
-                    ));
-
-                    $response = curl_exec($curl);
-
-                    Log::error('===== LOG createLabelG7 (6): ' . json_encode($response));
-                    curl_close($curl);
-
-
-                    /*
-                    // Gọi api download file về
-                    // Start api
-                    $curl = curl_init();
-
-                    curl_setopt_array($curl, array(
-                        CURLOPT_URL => 'https://g7logistics.com/agentapi/download-order',
-                        CURLOPT_RETURNTRANSFER => true,
-                        CURLOPT_ENCODING => '',
-                        CURLOPT_MAXREDIRS => 10,
-                        CURLOPT_TIMEOUT => 0,
-                        CURLOPT_FOLLOWLOCATION => true,
-                        CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
-                        CURLOPT_CUSTOMREQUEST => 'POST',
-                        CURLOPT_POSTFIELDS => '["' . $shipmentId . '"]',
-                        CURLOPT_HTTPHEADER => array(
-                            'Content-Type: application/json',
-                            'Authorization: Bearer ' . $token
-                        ),
-                    ));
-
-                    $response = curl_exec($curl);
-                    curl_close($curl);
-                    // Close api
-
-                    $base64_str = json_decode($response)->content;
-
-                    // Lưu file order vào thư mục: g7_upload phải được config trong config/filesystem.php/disk
-                    $order_file_name = 'order-' . $shipmentId . '.pdf';
-
-                    $save_success = Storage::disk('g7_upload')->put($order_file_name,base64_decode($base64_str));
-
-                    // Nếu lưu file thành công thì lưu lại path, còn không thì lưu đoạn text thông báo lỗi
-                    if ($save_success) {
-                        $file_order_path  = config('filesystems.disks.g7_upload')['path'] . '/' . $order_file_name;
-                    } else {
-                        $file_order_path = 'Save file error';
-                    }
-                    */
-
-                    // Chuẩn bị data để cập nhật db
-                    $user_id = auth()->user()->id;
-                    $order_id = $data['order_id'];
-                    $shipping_name = $data['shipping_name'];
-                    $shipping_street = $data['shipping_street'];
-                    $shipping_address1 = $data['shipping_address1'] ?? '';
-                    $shipping_address2 = $data['shipping_address2'];
-                    $shipping_company = $data['shipping_company'];
-                    $shipping_city = $data['shipping_city'];
-                    $shipping_zip = $data['shipping_zip'];
-                    $shipping_province = $data['shipping_province'];
-                    $shipping_country = $data['shipping_country'];
-                    $shipping_phone = $data['shipping_phone'];
-                    $amount = 0;
-                    $currency = 'VND';
-                    $label_url = ''; //$file_order_path
-                    $tracking_provider = $shipmentId;
-                    $tracking_number = '';
-                    $shipping_carrier = 'PNX';
-                    $shipping_provider = 'G7';
-                    $width = $data['package_width'];
-                    $height = $data['package_height'];
-                    $length = $data['package_length'];
-                    $weight = $data['package_weight'];
-                    $size_type = $data['size_type'];
-                    $weight_type = $data['weight_type'];
-
-                    try {
-                        Log::error('===== LOG createLabelG7 (7)');
-                        // { CALL phoenix.label_create_input(:p_user_id,:p_order_id,:p_shipping_name,:p_shipping_street,:p_shipping_address1,:p_shipping_address2,:p_shipping_company,:p_shipping_city,:p_shipping_zip,:p_shipping_province,:p_shipping_country,:p_shipping_phone,:p_amount,:p_currency,:p_label_url,:p_tracking_number,:p_shipping_carrier,:p_shipping_provider) }
-                        $results = DB::select('call label_create_input(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [
-                            $user_id,
-                            $order_id,
-                            $shipping_name,
-                            $shipping_street,
-                            $shipping_address1,
-                            $shipping_address2,
-                            $shipping_company,
-                            $shipping_city,
-                            $shipping_zip,
-                            $shipping_province,
-                            $shipping_country,
-                            $shipping_phone,
-                            $amount,
-                            $currency,
-                            $label_url,
-                            $tracking_provider,
-                            $tracking_number,
-                            $shipping_carrier,
-                            $shipping_provider,
-                            $width,
-                            $height,
-                            $length,
-                            $weight,
-                            $size_type,
-                            $weight_type,
-                            null
-                        ]);
-
-                    } catch (\Exception $e) {
-                        Log::error('===== LOG createLabelG7 (8) Exception: ' . $e->getMessage());
-                        return redirect(route('staff.orders.list'))->with('error', 'Label create failed!');
-                    }
-                    Log::error('===== LOG createLabelG7 (9)');
-                    return redirect(route('staff.orders.list'))->with('success', 'Label create successful!');
-                }
-                Log::error('===== LOG createLabelG7 (10): ' . $body_data);
-                return redirect()->back()->with('error', 'Label create failed!');
-            } else {
-                Log::error('===== LOG createLabelG7 (11): Login G7 via API failed!');
-                return redirect()->back()->with('error', 'Login G7 failed! Please try again later.');
-            }
-        } catch (Exception $e) {
-            Log::error('===== LOG createLabelG7 (12) Exception: ' . $e->getMessage());
-            //TODO redirect to error page
-            // abort(500);
-
-            return response([
-                'message_code' => 'UNEXPECTED_ERROR',
-                'message_text' => $e->getMessage(),
-                'file_error' => $e->getFile(),
-                'line_error' => $e->getLine(),
-            ], 400);
-        }
-
-        // exit();
-    }
 
     public function createLabelMyib(StoreLabelRequest $request)
     {
@@ -1478,7 +1038,7 @@ $data['extension'] = $extension;
 
 
 
-            // Check nếu người tạo order có webhook thì xử lý dữ liệu sau đó gửi vào webhook
+            // Check náº¿u ngÆ°á»i táº¡o order cÃ³ webhook thÃ¬ xá»­ lÃ½ dá»¯ liá»‡u sau Ä‘Ã³ gá»­i vÃ o webhook
             $orderData = DB::table('orders')->where('id', $data['order_id'])->first();
             $webhook_url = DB::table('users as u')
                 ->where('u.id', $orderData->user_id)
@@ -1574,16 +1134,14 @@ $data['extension'] = $extension;
     {
         try {
             $data = $this->orderService->getOrderPackageApi($request);
-            if ($data['message_code'] != 'SUCCESS') {
-                return response($data, 400);
+            if (($data['message_code'] ?? null) != 'SUCCESS') {
+                return response()->json($data, 400);
             }
-            return $data;
+            return response()->json($data);
         } catch (Exception $e) {
             Log::error($e);
-            //TODO redirect to error page
-            // abort(500);
 
-            return response([
+            return response()->json([
                 'message_code' => 'UNEXPECTED_ERROR',
                 'message_text' => $e->getMessage()
             ], 400);
@@ -1674,7 +1232,7 @@ $data['extension'] = $extension;
     public function checkTrackingExist(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'order_id' => 'required|integer|min:0|not_in:0'
+            'order_id' => 'required',
         ]);
 
         if ($validator->fails()) {
@@ -1682,131 +1240,224 @@ $data['extension'] = $extension;
                 'status' => 'error',
                 'tracking_number' => null,
                 'errors' => $validator->errors()
-            ]);
+            ], 422);
         }
 
-        $orderId = $request->input('order_id');
-        $res = DB::table('order_transactions')->where('order_id', $orderId)->first();
+        $order = \App\Support\ApiAccess::resolveOrder($request->input('order_id'));
+        if (!$order || !\App\Support\ApiAccess::canAccessOrder(auth()->user(), $order)) {
+            return response()->json([
+                'status' => 'error',
+                'tracking_number' => null,
+                'message' => 'Order not found or access denied',
+            ], 404);
+        }
+
+        $res = DB::table('order_transactions')->where('order_id', $order->id)->first();
 
         if ($res && $res->tracking_number) {
-            $trackingNumber = $res->tracking_number;
-
             return response()->json([
                 'status' => 'success',
-                'tracking_number' => $trackingNumber
+                'tracking_number' => $res->tracking_number,
+                'order_id' => $order->id,
+                'order_code' => $order->order_code,
             ]);
         }
 
         return response()->json([
             'status' => 'error',
-            'tracking_number' => null
+            'tracking_number' => null,
+            'message' => 'No tracking number for this order',
+        ], 404);
+    }
+
+    public function getLabelUrlByOrderId(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'order_id' => 'required',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => 'error',
+                'errors' => $validator->errors(),
+                'label_url' => null,
+            ], 422);
+        }
+
+        $order = \App\Support\ApiAccess::resolveOrder($request->input('order_id'));
+        if (!$order || !\App\Support\ApiAccess::canAccessOrder(auth()->user(), $order)) {
+            return response()->json([
+                'status' => 'error',
+                'order_id' => $request->input('order_id'),
+                'label_url' => null,
+                'message' => 'Order not found or access denied',
+            ], 404);
+        }
+
+        $tx = DB::table('order_transactions')->where('order_id', $order->id)->first();
+        if (!$tx || empty($tx->label_url)) {
+            return response()->json([
+                'status' => 'error',
+                'order_id' => $order->id,
+                'label_url' => null,
+                'message' => 'Label not found',
+            ], 404);
+        }
+
+        return response()->json([
+            'status' => 'success',
+            'order_id' => $order->id,
+            'order_code' => $order->order_code,
+            'label_url' => $tx->label_url,
+            'tracking_number' => $tx->tracking_number ?? null,
         ]);
     }
 
-    public function updateTrackingInfoByOrderId(Request $request) {
+    public function updateTrackingInfoByOrderId(Request $request)
+    {
         $validator = Validator::make($request->all(), [
-            'order_id' => 'required|integer|min:0|not_in:0',
-            'tracking_number' => 'required',
-            'shipping_carrier' => 'required|string',
-            'tracking_status' => 'nullable|string',
-            'label_url' => 'nullable|url',
+            'order_id' => 'required',
+            'tracking_number' => 'required|string|max:255',
+            'shipping_carrier' => 'required|string|max:255',
+            'tracking_status' => 'nullable|string|max:255',
+            'label_url' => 'nullable|url|max:2000',
+            'amount' => 'nullable|numeric',
+            'currency' => 'nullable|string|max:10',
         ]);
 
         if ($validator->fails()) {
             return response()->json([
                 'status' => 'error',
                 'errors' => $validator->errors()
-            ]);
+            ], 422);
         }
 
-        $orderId = $request->input('order_id');
+        $order = \App\Support\ApiAccess::resolveOrder($request->input('order_id'));
+        if (!$order || !\App\Support\ApiAccess::canAccessOrder(auth()->user(), $order)) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Order not found or access denied',
+            ], 404);
+        }
 
-        $orderInfo = DB::table('orders')->where('id', $orderId)->first();
+        // Staff-only write (route also has jwt.role, double-check)
+        if (!\App\Support\ApiAccess::isStaffRole(auth()->user())) {
+            return \App\Support\ApiAccess::forbidden();
+        }
+
+        $orderId = $order->id;
         $orderTrans = DB::table('order_transactions')->where('order_id', $orderId)->first();
 
-        if ($orderInfo && (!$orderTrans || !$orderTrans->tracking_number)) {
-            $orderPackage = DB::table('order_package')->where('order_id', $orderId)->first();
-
-            try {
-                $data = $request->input();
-
-                $user_id = auth()->user()->id;
-                $order_id = $orderInfo->id;
-                $shipping_name = 'HUNG LEU';
-                $shipping_street = '2248 US Highway 9,';
-                $shipping_address1 = null;
-                $shipping_address2 = null;
-                $shipping_company = 'LEU LEU FULFILLMENT';
-                $shipping_city = 'Howell';
-                $shipping_zip = '07731';
-                $shipping_province = 'NJ';
-                $shipping_country = 'US';
-                $shipping_phone = null;
-                $amount = $data['amount'] ?? 0;
-                $currency = $data['currency'] ?? 'VND';
-                $label_url = $data['label_url'];
-                $tracking_provider = null;
-                $tracking_number = $data['tracking_number'];
-                $shipping_carrier = $data['shipping_carrier'];
-                $shipping_provider = 'PIRATE';
-                $width = $orderPackage->width;
-                $height = $orderPackage->height;
-                $length = $orderPackage->length;
-                $weight = $orderPackage->weight;
-                $size_type = $orderPackage->size_type;
-                $weight_type = $orderPackage->weight_type;
-                $tracking_status = $data['tracking_status'];
-
-
-                DB::select('call label_create_input(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [
-                    $user_id,
-                    $order_id,
-                    $shipping_name,
-                    $shipping_street,
-                    $shipping_address1,
-                    $shipping_address2,
-                    $shipping_company,
-                    $shipping_city,
-                    $shipping_zip,
-                    $shipping_province,
-                    $shipping_country,
-                    $shipping_phone,
-                    $amount,
-                    $currency,
-                    $label_url,
-                    $tracking_provider,
-                    $tracking_number,
-                    $shipping_carrier,
-                    $shipping_provider,
-                    $width,
-                    $height,
-                    $length,
-                    $weight,
-                    $size_type,
-                    $weight_type,
-                    $tracking_status
-                ]);
-
-                return response()->json([
-                    'status' => 'success',
-                    'message' => 'Update label successful!',
-                ]);
-            } catch (Exception $e) {
-                Log::error('===== gsgdfdhdgfhf: ' . $e->getMessage());
-
-                return response()->json([
-                    'status' => 'error',
-                    'message' => $e->getMessage(),
-                    'file_error' => $e->getFile(),
-                    'line_error' => $e->getLine(),
-                ]);
-            }
+        if ($orderTrans && $orderTrans->tracking_number) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Order already has a tracking number.',
+            ], 409);
         }
 
-        return response()->json([
-            'status' => 'error',
-            'message' => 'Order ' . $orderId . ' not found.',
-        ]);
+        $orderPackage = DB::table('order_package')->where('order_id', $orderId)->first();
+        if (!$orderPackage) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Order package dimensions not found. Update package before setting tracking.',
+            ], 422);
+        }
+
+        try {
+            $data = $request->input();
+            $user_id = auth()->user()->id;
+
+            // Prefer warehouse / existing from-address over hard-coded ship-from when available
+            $from = null;
+            if ($order->order_address_from_id) {
+                $from = DB::table('order_addresses')->where('id', $order->order_address_from_id)->first();
+            }
+            if (!$from) {
+                $warehouse = DB::table('warehouses')->where('type', 'B')->first();
+                if ($warehouse) {
+                    $from = (object) [
+                        'name' => $warehouse->name ?? 'Warehouse',
+                        'street1' => $warehouse->address ?? '',
+                        'street2' => null,
+                        'street3' => null,
+                        'company' => $warehouse->name ?? '',
+                        'city' => $warehouse->city ?? '',
+                        'zip' => $warehouse->zip ?? '',
+                        'state' => $warehouse->state ?? '',
+                        'country' => $warehouse->country ?? 'US',
+                        'phone' => $warehouse->phone ?? null,
+                    ];
+                }
+            }
+
+            $shipping_name = $from->name ?? 'Warehouse';
+            $shipping_street = $from->street1 ?? '';
+            $shipping_address1 = $from->street2 ?? null;
+            $shipping_address2 = $from->street3 ?? null;
+            $shipping_company = $from->company ?? '';
+            $shipping_city = $from->city ?? '';
+            $shipping_zip = $from->zip ?? '';
+            $shipping_province = $from->state ?? '';
+            $shipping_country = $from->country ?? 'US';
+            $shipping_phone = $from->phone ?? null;
+
+            $amount = $data['amount'] ?? 0;
+            $currency = $data['currency'] ?? 'USD';
+            $label_url = $data['label_url'] ?? null;
+            $tracking_provider = null;
+            $tracking_number = $data['tracking_number'];
+            $shipping_carrier = $data['shipping_carrier'];
+            $shipping_provider = $data['shipping_provider'] ?? 'MANUAL';
+            $width = $orderPackage->width;
+            $height = $orderPackage->height;
+            $length = $orderPackage->length;
+            $weight = $orderPackage->weight;
+            $size_type = $orderPackage->size_type;
+            $weight_type = $orderPackage->weight_type;
+            $tracking_status = $data['tracking_status'] ?? 'UNKNOWN';
+
+            DB::select('call label_create_input(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [
+                $user_id,
+                $orderId,
+                $shipping_name,
+                $shipping_street,
+                $shipping_address1,
+                $shipping_address2,
+                $shipping_company,
+                $shipping_city,
+                $shipping_zip,
+                $shipping_province,
+                $shipping_country,
+                $shipping_phone,
+                $amount,
+                $currency,
+                $label_url,
+                $tracking_provider,
+                $tracking_number,
+                $shipping_carrier,
+                $shipping_provider,
+                $width,
+                $height,
+                $length,
+                $weight,
+                $size_type,
+                $weight_type,
+                $tracking_status
+            ]);
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Update label successful!',
+                'order_id' => $orderId,
+            ]);
+        } catch (Exception $e) {
+            Log::error('updateTrackingInfoByOrderId: ' . $e->getMessage());
+
+            return response()->json([
+                'status' => 'error',
+                'message' => $e->getMessage(),
+            ], 500);
+        }
     }
 
     public function downloadPreviews(Request $request)
