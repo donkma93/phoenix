@@ -3175,18 +3175,10 @@ $i++;
                 'weight_type' => $request['weight_type']
             ]);
 
-            $street = $request['shipping_street'];
-            if ($request['shipping_address1']) {
-                $street .= ',' . $request['shipping_address1'];
-            }
-            if ($request['shipping_address2']) {
-                $street .= ',' . $request['shipping_address2'];
-            }
-
             $addressFrom = [
                 'name' => $request['shipping_name'],
                 'company' => $request['shipping_company'],
-                'street1' => $street,
+                'street1' => $request['shipping_street'],
                 'street2' => $request['shipping_address1'],
                 'street3' => $request['shipping_address2'],
                 'city' => $request['shipping_city'],
@@ -3194,33 +3186,26 @@ $i++;
                 'zip' => $request['shipping_zip'],
                 'country' => $request['shipping_country'],
                 'phone' => $request['shipping_phone'],
+                'user_id' => $order->user_id,
+                'object_id' => null,
             ];
 
-            $dataFrom = Order::validateAddress($addressFrom);
-            if (count($dataFrom['errorMsg'])) {
-                return [
-                    'request' => $request,
-                    'errorMsg' => $dataFrom['errorMsg']
-                ];
-            }
-
-            $addressFrom['street1'] = $request['shipping_street'];
-            $addressFrom['user_id'] = $order->user_id;
-            $addressFrom['object_id'] = $dataFrom['value']['object_id'] ?? null;
+            // Shipbae uses its own address fields; do not depend on Shippo validation.
             $orderAddressFrom = OrderAddress::create($addressFrom);
 
             $order->order_address_from_id = $orderAddressFrom->id;
             $order->save();
 
-            $order = Order::with(['orderPackage', 'addressFrom', 'addressTo'])->findOrFail($orderId);
+            $order = Order::with(['orderPackage', 'addressFrom', 'addressTo', 'user'])->findOrFail($orderId);
             $package = $order->orderPackage;
             $shipmentPayload = $this->prepareShipbaeShipmentPayload($order, $package);
 
-            $shipbaeRates = $this->getShipbaeRates($shipmentPayload);
+            $ratesResult = $this->getShipbaeRatesWithMeta($shipmentPayload);
+            $shipbaeRates = $ratesResult['rates'];
             if (count($shipbaeRates) == 0) {
                 return [
                     'request' => $request,
-                    'errorMsg' => ['Rates Unavailable from Shipbae API']
+                    'errorMsg' => ['Rates Unavailable from Shipbae API: ' . ($ratesResult['error'] ?: 'empty rates')]
                 ];
             }
 
@@ -3251,6 +3236,17 @@ $i++;
     public function storeExcelShipbae($file, $request)
     {
         try {
+            $client = new ShipbaeClient();
+            if (!$client->isConfigured()) {
+                return [
+                    'isValid' => false,
+                    'message' => 'Shipbae API credentials not configured. Set SHIPBAE_BASE_URL, SHIPBAE_CLIENT_ID, SHIPBAE_CLIENT_SECRET in .env',
+                    'errors' => [
+                        'config' => 'Missing Shipbae credentials in environment',
+                    ],
+                ];
+            }
+
             $import = new StaffLabelsImport();
             Excel::import($import, $file);
 
@@ -3266,47 +3262,41 @@ $i++;
             $ordersSkip = [];
 
             foreach ($import->rows as $key => $row) {
-                $rs = DB::table('order_transactions')->where('order_id', $row['order_id'])->first();
+                $orderId = $row['order_id'] ?? 'unknown';
+
+                $rs = DB::table('order_transactions')->where('order_id', $orderId)->first();
                 if (!!$rs) {
-                    array_push($ordersSkip, $row['order_id']);
+                    array_push($ordersSkip, $orderId);
                     continue;
                 }
 
                 try {
-                    $order = $this->createLabel($row['order_id'])['order'];
+                    $order = $this->createLabel($orderId)['order'];
 
-                    $addressFrom = [
-                        'name' => $row['shipping_name'] ?? '',
-                        'company' => $row['shipping_company'] ?? null,
-                        'street1' => $row['shipping_street'] ?? '',
-                        'street2' => $row['shipping_address1'] ?? null,
-                        'street3' => $row['shipping_address2'] ?? null,
-                        'city' => $row['shipping_city'] ?? '',
-                        'state' => $row['shipping_province'] ?? '',
-                        'zip' => $row['shipping_zip'] ?? '',
-                        'country' => $row['shipping_country'] ?? '',
-                        'phone' => $row['shipping_phone'] ?? null,
-                    ];
-
+                    // Shipbae does not need Shippo address object_id.
+                    // Persist Excel sender address locally so payload can be built.
                     if (!$order->addressFrom) {
-                        $dataFrom = Order::validateAddress($addressFrom);
-                        if (count($dataFrom['errorMsg'])) {
-                            Log::error('IMPORT LABELS SHIPBAE: Address validation failed for order ' . $row['order_id'], [
-                                'errors' => $dataFrom['errorMsg']
-                            ]);
-                            array_push($ordersError, $row['order_id']);
-                            continue;
-                        }
+                        $addressFrom = [
+                            'name' => $row['shipping_name'] ?? '',
+                            'company' => $row['shipping_company'] ?? null,
+                            'street1' => $row['shipping_street'] ?? '',
+                            'street2' => $row['shipping_address1'] ?? null,
+                            'street3' => $row['shipping_address2'] ?? null,
+                            'city' => $row['shipping_city'] ?? '',
+                            'state' => $row['shipping_province'] ?? '',
+                            'zip' => $row['shipping_zip'] ?? '',
+                            'country' => $row['shipping_country'] ?? '',
+                            'phone' => $row['shipping_phone'] ?? null,
+                            'user_id' => $order->user_id,
+                            'object_id' => null,
+                        ];
 
-                        $addressFrom['street1'] = $row['shipping_street'] ?? '';
-                        $addressFrom['user_id'] = $order->user_id;
-                        $addressFrom['object_id'] = $dataFrom['value']['object_id'] ?? null;
                         $orderAddressFrom = OrderAddress::create($addressFrom);
                         $order->order_address_from_id = $orderAddressFrom->id;
                         $order->save();
                     }
 
-                    $order = Order::with(['orderPackage', 'addressFrom', 'addressTo'])->findOrFail($row['order_id']);
+                    $order = Order::with(['orderPackage', 'addressFrom', 'addressTo', 'user'])->findOrFail($orderId);
 
                     if (isset($row['package_width']) || isset($row['package_height']) ||
                         isset($row['package_length']) || isset($row['package_weight'])) {
@@ -3324,17 +3314,33 @@ $i++;
 
                     $package = $order->orderPackage;
                     if (!$package) {
-                        Log::error('IMPORT LABELS SHIPBAE: Order package not found for order ' . $row['order_id']);
-                        array_push($ordersError, $row['order_id']);
+                        $reason = $orderId . ': order package not found';
+                        Log::error('IMPORT LABELS SHIPBAE: ' . $reason);
+                        array_push($ordersError, $reason);
+                        continue;
+                    }
+
+                    if (!$order->addressTo) {
+                        $reason = $orderId . ': receiver address (addressTo) is missing';
+                        Log::error('IMPORT LABELS SHIPBAE: ' . $reason);
+                        array_push($ordersError, $reason);
                         continue;
                     }
 
                     $shipmentPayload = $this->prepareShipbaeShipmentPayload($order, $package);
-                    $shipbaeRates = $this->getShipbaeRates($shipmentPayload);
+                    $ratesResult = $this->getShipbaeRatesWithMeta($shipmentPayload);
+                    $shipbaeRates = $ratesResult['rates'];
 
                     if (count($shipbaeRates) == 0) {
-                        Log::error('IMPORT LABELS SHIPBAE: No rates available for order ' . $row['order_id']);
-                        array_push($ordersError, $row['order_id']);
+                        $reason = $orderId . ': no Shipbae rates (' . ($ratesResult['error'] ?: 'empty rates') . ')';
+                        Log::error('IMPORT LABELS SHIPBAE: ' . $reason, [
+                            'payload_preview' => [
+                                'from' => $shipmentPayload['from_address'] ?? null,
+                                'to' => $shipmentPayload['to_address'] ?? null,
+                                'parcel' => $shipmentPayload['parcel'] ?? null,
+                            ],
+                        ]);
+                        array_push($ordersError, $reason);
                         continue;
                     }
 
@@ -3348,6 +3354,16 @@ $i++;
                                 break;
                             }
                         }
+
+                        if (!$selectedRate) {
+                            $reason = $orderId . ': service/package_type not found in Shipbae rates';
+                            Log::error('IMPORT LABELS SHIPBAE: ' . $reason, [
+                                'service' => $row['service'] ?? null,
+                                'package_type' => $row['package_type'] ?? null,
+                            ]);
+                            array_push($ordersError, $reason);
+                            continue;
+                        }
                     }
 
                     if (!$selectedRate) {
@@ -3357,7 +3373,7 @@ $i++;
                         $selectedRate = $shipbaeRates[0];
                     }
 
-                    Log::info('IMPORT LABELS SHIPBAE: Selected rate for order ' . $row['order_id'], [
+                    Log::info('IMPORT LABELS SHIPBAE: Selected rate for order ' . $orderId, [
                         'carrier' => $selectedRate['carrier'] ?? null,
                         'service' => $selectedRate['service'] ?? null,
                         'package_type' => $selectedRate['package_type'] ?? null,
@@ -3373,31 +3389,33 @@ $i++;
 
                     $transaction = $this->createShipbaeTransactionFromPayload($createPayload, $order);
                     if (count($transaction['errorMsg'])) {
-                        Log::error('IMPORT LABELS SHIPBAE: API error for order ' . $row['order_id'], [
-                            'errors' => $transaction['errorMsg']
-                        ]);
-                        array_push($ordersError, $row['order_id']);
+                        $apiError = implode('; ', $transaction['errorMsg']);
+                        $reason = $orderId . ': create shipment failed (' . $apiError . ')';
+                        Log::error('IMPORT LABELS SHIPBAE: ' . $reason);
+                        array_push($ordersError, $reason);
                         continue;
                     }
 
                     if (!isset($transaction['value']) || !is_array($transaction['value'])) {
-                        Log::error('IMPORT LABELS SHIPBAE: Invalid response for order ' . $row['order_id']);
-                        array_push($ordersError, $row['order_id']);
+                        $reason = $orderId . ': invalid Shipbae create response';
+                        Log::error('IMPORT LABELS SHIPBAE: ' . $reason);
+                        array_push($ordersError, $reason);
                         continue;
                     }
 
                     $this->persistShipbaeLabelData($order, $package, null, $transaction['value']);
 
-                    Log::info('IMPORT LABELS SHIPBAE: Successfully created label for order ' . $row['order_id'], [
+                    Log::info('IMPORT LABELS SHIPBAE: Successfully created label for order ' . $orderId, [
                         'tracking_number' => $transaction['value']['tracking_number'] ?? null
                     ]);
                 } catch (Exception $e) {
-                    Log::error('IMPORT LABELS SHIPBAE: Exception for order ' . ($row['order_id'] ?? 'unknown'), [
+                    $reason = $orderId . ': ' . $e->getMessage();
+                    Log::error('IMPORT LABELS SHIPBAE: Exception for order ' . $orderId, [
                         'message' => $e->getMessage(),
                         'file' => $e->getFile(),
                         'line' => $e->getLine()
                     ]);
-                    array_push($ordersError, $row['order_id'] ?? 'unknown');
+                    array_push($ordersError, $reason);
                 }
             }
 
@@ -3409,6 +3427,7 @@ $i++;
                 'isValid' => true,
                 'rawData' => $import->rows,
                 'ordersError' => $ordersError,
+                'ordersSkip' => $ordersSkip,
             ];
         } catch (Exception $e) {
             Log::error('storeExcelShipbae Exception: ' . $e->getMessage());
@@ -3558,10 +3577,18 @@ $i++;
 
     private function getShipbaeRates(array $shipmentPayload): array
     {
+        return $this->getShipbaeRatesWithMeta($shipmentPayload)['rates'];
+    }
+
+    private function getShipbaeRatesWithMeta(array $shipmentPayload): array
+    {
         $client = new ShipbaeClient();
         if (!$client->isConfigured()) {
             Log::error('Shipbae is not configured');
-            return [];
+            return [
+                'rates' => [],
+                'error' => 'Shipbae credentials not configured',
+            ];
         }
 
         // Rates endpoint returns all services when service is omitted.
@@ -3573,7 +3600,11 @@ $i++;
                 'http_code' => $response['http_code'],
                 'error' => $response['error'],
             ]);
-            return [];
+
+            return [
+                'rates' => [],
+                'error' => $response['error'] ?: ('HTTP ' . ($response['http_code'] ?? 'unknown')),
+            ];
         }
 
         $rates = [];
@@ -3590,7 +3621,10 @@ $i++;
             $rates[] = $rate;
         }
 
-        return $rates;
+        return [
+            'rates' => $rates,
+            'error' => count($rates) ? null : 'API returned no usable rates',
+        ];
     }
 
     private function extractShipbaeAmount($rate): float

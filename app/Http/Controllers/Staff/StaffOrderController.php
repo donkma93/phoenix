@@ -804,26 +804,39 @@ $data['extension'] = $extension;
     public function importLabelShipbae(Request $request)
     {
         try {
+            if (!$request->hasFile('label_file')) {
+                return back()->with('error', 'Please upload an Excel file for Shipbae import.');
+            }
+
             $data = $this->orderService->storeExcelShipbae(request()->file('label_file'), $request->all());
 
             if (!$data['isValid']) {
                 return back()
-                    ->with('error', $data['message'] ?? '')
+                    ->with('error', $data['message'] ?? 'Validate failed')
                     ->with('csvErrorsShipbae', $data['errors'] ?? [])
                     ->with('errorsForeachShipbae', $data['errorsArr'] ?? []);
             }
 
             if (count($data['ordersError']) > 0) {
-                Log::warning('IMPORT LABELS SHIPBAE FAILED: ' . implode(', ', $data['ordersError']));
+                $errorSummary = implode(' | ', $data['ordersError']);
+                Log::warning('IMPORT LABELS SHIPBAE FAILED: ' . $errorSummary);
 
-                return redirect()->route('staff.orders.list')->with('warning', 'Create failed: ' . implode(', ', $data['ordersError']));
+                return back()
+                    ->with('error', 'Create failed: ' . $errorSummary)
+                    ->with('errorsForeachShipbae', $data['ordersError']);
             }
 
-            return redirect()->route('staff.orders.list')->with('success', "Create labels successful");
+            $skipCount = count($data['ordersSkip'] ?? []);
+            $successMsg = 'Create labels successful';
+            if ($skipCount > 0) {
+                $successMsg .= '. Skipped (already labeled): ' . implode(', ', $data['ordersSkip']);
+            }
+
+            return redirect()->route('staff.orders.list')->with('success', $successMsg);
         } catch (Exception $e) {
             Log::error($e);
 
-            return redirect()->route('staff.orders.list')->with('error', "Create labels failed");
+            return back()->with('error', 'Create labels failed: ' . $e->getMessage());
         }
     }
 
