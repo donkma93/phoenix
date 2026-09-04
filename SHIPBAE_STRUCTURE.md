@@ -45,6 +45,11 @@ Parcel:
 - dimensions: **inches**
 - weight: **ounces**
 
+## Label files
+- After create shipment, Phoenix downloads the Shipbae label and stores a **local** file under `storage/app/public/uploads/PNX_LABEL/YYYYMM/*.pdf`.
+- `order_transactions.label_url` should point to that local `/storage/.../*.pdf` URL (not a CDN path that may omit `.pdf`).
+- Preview/download rely on the `.pdf` extension; local persistence avoids intermittent CDN URLs without extension.
+
 ## Address / ZIP rules (US)
 - `from_address.zip` / `to_address.zip` must be string `#####` or `#####-####`.
 - Excel `shipping_zip` is normalized (trim, numeric cast, leading-zero pad) before create.

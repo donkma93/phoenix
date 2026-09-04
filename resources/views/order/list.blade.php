@@ -397,8 +397,17 @@
 
         function previewPDF(file) {
             const jsPDF = window.jsPDF;
-            const splitFile = file.split('.');
-            const fileType = splitFile[splitFile.length - 1];
+            // Use pathname extension only (ignore query/hash and multi-dot CDN names).
+            let fileType = '';
+            try {
+                const path = (file || '').split('?')[0].split('#')[0];
+                const lastSlash = path.lastIndexOf('/');
+                const baseName = lastSlash >= 0 ? path.slice(lastSlash + 1) : path;
+                const lastDot = baseName.lastIndexOf('.');
+                fileType = lastDot >= 0 ? baseName.slice(lastDot + 1).toLowerCase() : '';
+            } catch (e) {
+                fileType = '';
+            }
             const validImageTypes = ['gif', 'jpeg', 'png', 'tiff', 'jpg', 'heif'];
 
             let imgSrc;

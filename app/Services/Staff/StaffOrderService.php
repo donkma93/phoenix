@@ -3897,11 +3897,22 @@ $i++;
             $data = $response['data'];
             $shipmentId = $data['id'] ?? null;
             $trackingNumber = $data['tracking_code'] ?? ($data['customer_tracking_number'] ?? null);
-            $labelUrl = $data['label']['image_url'] ?? ($data['label_url'] ?? null);
+            $remoteLabelUrl = $data['label']['image_url'] ?? ($data['label_url'] ?? null);
             $labelBase64 = $data['label']['image_base64'] ?? null;
+            $fileKey = $shipmentId ?: ($trackingNumber ?: ($order->order_number ?? $order->id));
 
-            if (!$labelUrl && is_string($labelBase64) && $labelBase64 !== '') {
-                $labelUrl = $this->saveShipbaeLabelFromBase64($labelBase64, $shipmentId ?: ($order->order_number ?? $order->id));
+            // Always persist a local *.pdf URL so preview/download never depend on
+            // CDN paths that sometimes omit the .pdf extension.
+            $labelUrl = null;
+            if (is_string($labelBase64) && $labelBase64 !== '') {
+                $labelUrl = $this->saveShipbaeLabelFromBase64($labelBase64, $fileKey);
+            }
+            if (!$labelUrl && is_string($remoteLabelUrl) && $remoteLabelUrl !== '') {
+                $labelUrl = $this->saveShipbaeLabelFromRemoteUrl($remoteLabelUrl, $fileKey);
+            }
+            // Last resort: keep remote URL, but force a .pdf suffix for preview logic.
+            if (!$labelUrl && is_string($remoteLabelUrl) && $remoteLabelUrl !== '') {
+                $labelUrl = $this->ensurePdfExtensionInUrl($remoteLabelUrl);
             }
 
             $amount = null;
@@ -3969,29 +3980,107 @@ $i++;
                 return null;
             }
 
-            $folder = 'uploads/PNX_LABEL/' . date('Ym');
-            $isPdf = substr($decoded, 0, 4) === '%PDF';
-
-            if ($isPdf) {
-                $relativePath = $folder . '/' . $fileKey . '.pdf';
-                Storage::disk('public')->put($relativePath, $decoded);
-                return asset('storage/' . $relativePath);
-            }
-
-            $pdfContent = $this->convertImageToPdf($decoded, 'png');
-            if ($pdfContent !== null) {
-                $relativePath = $folder . '/' . $fileKey . '.pdf';
-                Storage::disk('public')->put($relativePath, $pdfContent);
-                return asset('storage/' . $relativePath);
-            }
-
-            $relativePath = $folder . '/' . $fileKey . '.png';
-            Storage::disk('public')->put($relativePath, $decoded);
-            return asset('storage/' . $relativePath);
+            return $this->storeShipbaeLabelBinary($decoded, $fileKey);
         } catch (Exception $e) {
             Log::error('saveShipbaeLabelFromBase64 error: ' . $e->getMessage());
             return null;
         }
+    }
+
+    private function saveShipbaeLabelFromRemoteUrl(string $remoteUrl, $fileKey): ?string
+    {
+        try {
+            $binary = $this->readLabelBinary($remoteUrl);
+            if ($binary === null || $binary === false || $binary === '') {
+                Log::warning('Shipbae remote label download failed', ['url' => $remoteUrl]);
+                return null;
+            }
+
+            return $this->storeShipbaeLabelBinary($binary, $fileKey);
+        } catch (Exception $e) {
+            Log::error('saveShipbaeLabelFromRemoteUrl error: ' . $e->getMessage(), [
+                'url' => $remoteUrl,
+            ]);
+            return null;
+        }
+    }
+
+    private function storeShipbaeLabelBinary($binary, $fileKey): ?string
+    {
+        if (!is_string($binary) || $binary === '') {
+            return null;
+        }
+
+        $safeKey = preg_replace('/[^A-Za-z0-9._-]+/', '_', (string) $fileKey);
+        if ($safeKey === null || $safeKey === '') {
+            $safeKey = 'shipbae_' . time();
+        }
+
+        $folder = 'uploads/PNX_LABEL/' . date('Ym');
+        $isPdf = substr($binary, 0, 4) === '%PDF';
+
+        if ($isPdf) {
+            $relativePath = $folder . '/' . $safeKey . '.pdf';
+            Storage::disk('public')->put($relativePath, $binary);
+            return asset('storage/' . $relativePath);
+        }
+
+        // Detect common image signatures and convert to PDF.
+        $imageFormat = 'png';
+        if (strncmp($binary, "\xFF\xD8\xFF", 3) === 0) {
+            $imageFormat = 'jpg';
+        } elseif (strncmp($binary, "\x89PNG", 4) === 0) {
+            $imageFormat = 'png';
+        }
+
+        $pdfContent = $this->convertImageToPdf($binary, $imageFormat);
+        if ($pdfContent !== null) {
+            $relativePath = $folder . '/' . $safeKey . '.pdf';
+            Storage::disk('public')->put($relativePath, $pdfContent);
+            return asset('storage/' . $relativePath);
+        }
+
+        // Fallback image path still keeps an extension for preview.
+        $relativePath = $folder . '/' . $safeKey . '.' . $imageFormat;
+        Storage::disk('public')->put($relativePath, $binary);
+        return asset('storage/' . $relativePath);
+    }
+
+    private function ensurePdfExtensionInUrl(string $url): string
+    {
+        $parts = parse_url($url);
+        if (!is_array($parts) || empty($parts['path'])) {
+            return Str::endsWith(strtolower($url), '.pdf') ? $url : (rtrim($url, '/') . '.pdf');
+        }
+
+        $path = $parts['path'];
+        $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+        if ($ext === 'pdf') {
+            return $url;
+        }
+
+        // Append .pdf to path only (preserve query/fragment).
+        $parts['path'] = $path . (Str::endsWith($path, '/') ? 'label.pdf' : '.pdf');
+
+        $rebuilt = '';
+        if (!empty($parts['scheme'])) {
+            $rebuilt .= $parts['scheme'] . '://';
+        }
+        if (!empty($parts['host'])) {
+            $rebuilt .= $parts['host'];
+        }
+        if (!empty($parts['port'])) {
+            $rebuilt .= ':' . $parts['port'];
+        }
+        $rebuilt .= $parts['path'];
+        if (!empty($parts['query'])) {
+            $rebuilt .= '?' . $parts['query'];
+        }
+        if (!empty($parts['fragment'])) {
+            $rebuilt .= '#' . $parts['fragment'];
+        }
+
+        return $rebuilt !== '' ? $rebuilt : ($url . '.pdf');
     }
 
     private function persistShipbaeLabelData(Order $order, ?OrderPackage $orderPackage, ?OrderRate $orderRate, array $transactionValue): void
