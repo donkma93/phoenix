@@ -45,6 +45,13 @@ Parcel:
 - dimensions: **inches**
 - weight: **ounces**
 
+## Address / ZIP rules (US)
+- `from_address.zip` / `to_address.zip` must be string `#####` or `#####-####`.
+- Excel `shipping_zip` is normalized (trim, numeric cast, leading-zero pad) before create.
+- **Rates can succeed even when create rejects ZIP.** Create `/shipments` is authoritative.
+- Example: Portland `97275` is rejected by Shipbae create with `[from_address.zip] Zip Code is not valid`, while nearby ZIPs like `97214` / `97201` / `97266` succeed. Prefer a street-deliverable warehouse ZIP, not PO Box / unique ZIP if carrier rejects it.
+- Excel Shipbae import always upserts sender `addressFrom` from the file so corrected ZIP takes effect on re-import.
+
 ## Files
 - `app/Services/Shipbae/ShipbaeClient.php`
 - `app/Services/Staff/StaffOrderService.php` (`storeLabelShipbae`, `storeExcelShipbae`, ...)

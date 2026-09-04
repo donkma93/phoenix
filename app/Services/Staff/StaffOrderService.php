@@ -3175,6 +3175,20 @@ $i++;
                 'weight_type' => $request['weight_type']
             ]);
 
+            $normalizedZip = $this->normalizeShipbaeZip(
+                $request['shipping_zip'] ?? '',
+                $request['shipping_country'] ?? 'US'
+            );
+            $countryCode = strtoupper((string) $this->getCountryCode($request['shipping_country'] ?? 'US'));
+            if ($countryCode === 'US' && !$this->isValidShipbaeUsZip($normalizedZip)) {
+                return [
+                    'request' => $request,
+                    'errorMsg' => [
+                        "shipping_zip '{$request['shipping_zip']}' invalid US ZIP format after normalize ('{$normalizedZip}'). Expected ##### or #####-####."
+                    ],
+                ];
+            }
+
             $addressFrom = [
                 'name' => $request['shipping_name'],
                 'company' => $request['shipping_company'],
@@ -3183,7 +3197,7 @@ $i++;
                 'street3' => $request['shipping_address2'],
                 'city' => $request['shipping_city'],
                 'state' => $request['shipping_province'],
-                'zip' => $request['shipping_zip'],
+                'zip' => $normalizedZip,
                 'country' => $request['shipping_country'],
                 'phone' => $request['shipping_phone'],
                 'user_id' => $order->user_id,
@@ -3273,25 +3287,43 @@ $i++;
                 try {
                     $order = $this->createLabel($orderId)['order'];
 
-                    // Shipbae does not need Shippo address object_id.
-                    // Persist Excel sender address locally so payload can be built.
-                    if (!$order->addressFrom) {
-                        $addressFrom = [
-                            'name' => $row['shipping_name'] ?? '',
-                            'company' => $row['shipping_company'] ?? null,
-                            'street1' => $row['shipping_street'] ?? '',
-                            'street2' => $row['shipping_address1'] ?? null,
-                            'street3' => $row['shipping_address2'] ?? null,
-                            'city' => $row['shipping_city'] ?? '',
-                            'state' => $row['shipping_province'] ?? '',
-                            'zip' => $row['shipping_zip'] ?? '',
-                            'country' => $row['shipping_country'] ?? '',
-                            'phone' => $row['shipping_phone'] ?? null,
-                            'user_id' => $order->user_id,
-                            'object_id' => null,
-                        ];
+                    $normalizedZip = $this->normalizeShipbaeZip(
+                        $row['shipping_zip'] ?? '',
+                        $row['shipping_country'] ?? 'US'
+                    );
+                    $countryCode = strtoupper((string) $this->getCountryCode($row['shipping_country'] ?? 'US'));
+                    if ($countryCode === 'US' && !$this->isValidShipbaeUsZip($normalizedZip)) {
+                        $rawZip = (string) ($row['shipping_zip'] ?? '');
+                        $reason = $orderId
+                            . ": shipping_zip '{$rawZip}' invalid US ZIP format after normalize ('{$normalizedZip}'). "
+                            . 'Expected ##### or #####-####.';
+                        Log::error('IMPORT LABELS SHIPBAE: ' . $reason);
+                        array_push($ordersError, $reason);
+                        continue;
+                    }
 
-                        $orderAddressFrom = OrderAddress::create($addressFrom);
+                    // Always upsert sender from Excel so corrected ZIP takes effect on re-import.
+                    // Shipbae does not need Shippo address object_id.
+                    $addressFromData = [
+                        'name' => $row['shipping_name'] ?? '',
+                        'company' => $row['shipping_company'] ?? null,
+                        'street1' => $row['shipping_street'] ?? '',
+                        'street2' => $row['shipping_address1'] ?? null,
+                        'street3' => $row['shipping_address2'] ?? null,
+                        'city' => $row['shipping_city'] ?? '',
+                        'state' => $row['shipping_province'] ?? '',
+                        'zip' => $normalizedZip,
+                        'country' => $row['shipping_country'] ?? '',
+                        'phone' => $row['shipping_phone'] ?? null,
+                        'user_id' => $order->user_id,
+                        'object_id' => null,
+                    ];
+
+                    if ($order->addressFrom) {
+                        $order->addressFrom->fill($addressFromData);
+                        $order->addressFrom->save();
+                    } else {
+                        $orderAddressFrom = OrderAddress::create($addressFromData);
                         $order->order_address_from_id = $orderAddressFrom->id;
                         $order->save();
                     }
@@ -3390,8 +3422,11 @@ $i++;
                     $transaction = $this->createShipbaeTransactionFromPayload($createPayload, $order);
                     if (count($transaction['errorMsg'])) {
                         $apiError = implode('; ', $transaction['errorMsg']);
-                        $reason = $orderId . ': create shipment failed (' . $apiError . ')';
-                        Log::error('IMPORT LABELS SHIPBAE: ' . $reason);
+                        $sentZip = (string) ($createPayload['from_address']['zip'] ?? $normalizedZip);
+                        $reason = $this->formatShipbaeZipRejectionMessage($orderId, $sentZip, $apiError);
+                        Log::error('IMPORT LABELS SHIPBAE: ' . $reason, [
+                            'from_address' => $createPayload['from_address'] ?? null,
+                        ]);
                         array_push($ordersError, $reason);
                         continue;
                     }
@@ -3488,9 +3523,82 @@ $i++;
         return round(max($weight, 0.1), 3);
     }
 
+    private function normalizeShipbaeZip($zip, ?string $country = 'US'): string
+    {
+        if ($zip === null) {
+            return '';
+        }
+
+        // Excel may import numeric zips as float/int (97275.0 / 2108).
+        if (is_float($zip) || is_int($zip)) {
+            $zip = (string) (int) $zip;
+        } else {
+            $zip = trim((string) $zip);
+            if ($zip !== '' && preg_match('/^\d+\.0+$/', $zip)) {
+                $zip = (string) ((int) $zip);
+            }
+        }
+
+        $countryCode = strtoupper((string) $this->getCountryCode($country ?? 'US'));
+        if ($countryCode !== 'US') {
+            return $zip;
+        }
+
+        // Keep ZIP+4 if already well-formed.
+        if (preg_match('/^\d{5}-\d{4}$/', $zip)) {
+            return $zip;
+        }
+
+        $digits = preg_replace('/\D+/', '', $zip) ?? '';
+        if ($digits === '') {
+            return '';
+        }
+
+        // Preserve leading zeros stripped by Excel (e.g. 02108 -> 2108).
+        if (strlen($digits) >= 3 && strlen($digits) < 5) {
+            $digits = str_pad($digits, 5, '0', STR_PAD_LEFT);
+        }
+
+        if (strlen($digits) > 5 && strlen($digits) < 9) {
+            $digits = substr($digits, 0, 5);
+        }
+
+        if (strlen($digits) === 9) {
+            return substr($digits, 0, 5) . '-' . substr($digits, 5, 4);
+        }
+
+        if (strlen($digits) >= 5) {
+            return substr($digits, 0, 5);
+        }
+
+        return $digits;
+    }
+
+    private function isValidShipbaeUsZip(string $zip): bool
+    {
+        return (bool) preg_match('/^\d{5}(-\d{4})?$/', $zip);
+    }
+
+    private function formatShipbaeZipRejectionMessage(string $orderId, string $zip, string $apiError): string
+    {
+        $zipLabel = $zip !== '' ? "'{$zip}'" : '(empty)';
+
+        if (stripos($apiError, 'zip') !== false && stripos($apiError, 'not valid') !== false) {
+            return $orderId
+                . ': from_address.zip '
+                . $zipLabel
+                . ' is not accepted by Shipbae/USPS for label purchase. '
+                . 'Use a street-deliverable US ZIP (Portland examples that work: 97214, 97201, 97266), then re-import.';
+        }
+
+        return $orderId . ': create shipment failed (' . $apiError . '), from_address.zip=' . $zipLabel;
+    }
+
     private function mapAddressToShipbae($address, $fallbackEmail = null): array
     {
         $nameParts = $this->splitName($address->name ?? '');
+        $country = $this->getCountryCode($address->country ?? 'US');
+        $zip = $this->normalizeShipbaeZip($address->zip ?? '', $country);
 
         $mapped = [
             'company' => $address->company ?? null,
@@ -3500,8 +3608,8 @@ $i++;
             'street2' => $address->street2 ?? ($address->street3 ?? null),
             'city' => $address->city ?? '',
             'state' => $address->state ?? '',
-            'zip' => $address->zip ?? '',
-            'country' => $this->getCountryCode($address->country ?? 'US'),
+            'zip' => $zip,
+            'country' => $country,
             'phone' => $address->phone ?? null,
             'email' => $address->email ?? $fallbackEmail,
             'is_residential' => empty($address->company),

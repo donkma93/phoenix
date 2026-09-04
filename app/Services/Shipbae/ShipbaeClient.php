@@ -232,9 +232,35 @@ class ShipbaeClient
             if (!empty($data['message']) && is_string($data['message'])) {
                 return $data['message'];
             }
+
+            // Nested shape: {"error":{"name":"...","message":"[from_address.zip] ...","status":400}}
+            if (!empty($data['error']) && is_array($data['error'])) {
+                if (!empty($data['error']['message']) && is_string($data['error']['message'])) {
+                    return $data['error']['message'];
+                }
+                if (!empty($data['error']['name']) && is_string($data['error']['name'])) {
+                    return $data['error']['name'];
+                }
+            }
+
             if (!empty($data['error']) && is_string($data['error'])) {
                 return $data['error'];
             }
+
+            if (!empty($data['fields']) && is_array($data['fields'])) {
+                $parts = [];
+                foreach ($data['fields'] as $key => $value) {
+                    if (is_array($value)) {
+                        $parts[] = $key . ': ' . implode(', ', $value);
+                    } elseif (is_string($value)) {
+                        $parts[] = $key . ': ' . $value;
+                    }
+                }
+                if ($parts) {
+                    return implode('; ', $parts);
+                }
+            }
+
             if (!empty($data['errors']) && is_array($data['errors'])) {
                 $parts = [];
                 foreach ($data['errors'] as $key => $value) {
@@ -250,7 +276,16 @@ class ShipbaeClient
             }
         }
 
+        // Last resort: try nested message inside raw JSON without dumping full body.
         if (is_string($raw) && $raw !== '') {
+            $decoded = json_decode($raw, true);
+            if (is_array($decoded)) {
+                $nested = $decoded['error']['message'] ?? ($decoded['message'] ?? null);
+                if (is_string($nested) && $nested !== '') {
+                    return $nested;
+                }
+            }
+
             return 'Shipbae API error (HTTP ' . $httpCode . '): ' . substr($raw, 0, 500);
         }
 
