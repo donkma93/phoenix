@@ -50,6 +50,11 @@ Parcel:
 - `order_transactions.label_url` should point to that local `/storage/.../*.pdf` URL (not a CDN path that may omit `.pdf`).
 - Preview/download rely on the `.pdf` extension; local persistence avoids intermittent CDN URLs without extension.
 
+## Excel auto rate selection
+- If Excel does **not** specify `service`/`package_type`, auto-buy prefers cheapest **`custom_package`** rates.
+- Skips First-Class mailpiece types (`usps_card`, `usps_letter`, `usps_flat`) because they often reject normal box sizes (e.g. length must be 5–6 in for card).
+- On package-constraint create failures, retries the next safe candidate rate.
+
 ## Address / ZIP rules (US)
 - `from_address.zip` / `to_address.zip` must be string `#####` or `#####-####`.
 - Excel `shipping_zip` is normalized (trim, numeric cast, leading-zero pad) before create.

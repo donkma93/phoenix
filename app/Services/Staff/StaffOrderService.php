@@ -3376,64 +3376,74 @@ $i++;
                         continue;
                     }
 
-                    $selectedRate = null;
-                    if (!empty($row['service'])) {
-                        foreach ($shipbaeRates as $rate) {
-                            $serviceMatch = ($rate['service'] ?? null) === $row['service'];
-                            $packageMatch = empty($row['package_type']) || (($rate['package_type'] ?? null) === $row['package_type']);
-                            if ($serviceMatch && $packageMatch) {
-                                $selectedRate = $rate;
-                                break;
-                            }
-                        }
-
-                        if (!$selectedRate) {
-                            $reason = $orderId . ': service/package_type not found in Shipbae rates';
-                            Log::error('IMPORT LABELS SHIPBAE: ' . $reason, [
-                                'service' => $row['service'] ?? null,
-                                'package_type' => $row['package_type'] ?? null,
-                            ]);
-                            array_push($ordersError, $reason);
-                            continue;
-                        }
-                    }
-
-                    if (!$selectedRate) {
-                        usort($shipbaeRates, function ($a, $b) {
-                            return $this->extractShipbaeAmount($a) <=> $this->extractShipbaeAmount($b);
-                        });
-                        $selectedRate = $shipbaeRates[0];
-                    }
-
-                    Log::info('IMPORT LABELS SHIPBAE: Selected rate for order ' . $orderId, [
-                        'carrier' => $selectedRate['carrier'] ?? null,
-                        'service' => $selectedRate['service'] ?? null,
-                        'package_type' => $selectedRate['package_type'] ?? null,
-                        'amount' => $this->extractShipbaeAmount($selectedRate),
-                    ]);
-
-                    $createPayload = $this->prepareShipbaeShipmentPayload(
-                        $order,
-                        $package,
-                        $selectedRate['service'] ?? null,
-                        $selectedRate['package_type'] ?? 'custom_package'
+                    $candidateRates = $this->selectShipbaeExcelRateCandidates(
+                        $shipbaeRates,
+                        $row['service'] ?? null,
+                        $row['package_type'] ?? null
                     );
 
-                    $transaction = $this->createShipbaeTransactionFromPayload($createPayload, $order);
-                    if (count($transaction['errorMsg'])) {
-                        $apiError = implode('; ', $transaction['errorMsg']);
-                        $sentZip = (string) ($createPayload['from_address']['zip'] ?? $normalizedZip);
-                        $reason = $this->formatShipbaeZipRejectionMessage($orderId, $sentZip, $apiError);
-                        Log::error('IMPORT LABELS SHIPBAE: ' . $reason, [
-                            'from_address' => $createPayload['from_address'] ?? null,
-                        ]);
+                    if (count($candidateRates) === 0) {
+                        $reason = $orderId . ': no suitable Shipbae rate for Excel auto-buy '
+                            . '(prefer custom_package; first-class card/letter/flat skipped unless size matches)';
+                        Log::error('IMPORT LABELS SHIPBAE: ' . $reason);
                         array_push($ordersError, $reason);
                         continue;
                     }
 
-                    if (!isset($transaction['value']) || !is_array($transaction['value'])) {
-                        $reason = $orderId . ': invalid Shipbae create response';
-                        Log::error('IMPORT LABELS SHIPBAE: ' . $reason);
+                    $transaction = null;
+                    $createPayload = null;
+                    $selectedRate = null;
+                    $attemptErrors = [];
+
+                    foreach ($candidateRates as $candidateRate) {
+                        $selectedRate = $candidateRate;
+                        Log::info('IMPORT LABELS SHIPBAE: Trying rate for order ' . $orderId, [
+                            'carrier' => $selectedRate['carrier'] ?? null,
+                            'service' => $selectedRate['service'] ?? null,
+                            'package_type' => $selectedRate['package_type'] ?? null,
+                            'amount' => $this->extractShipbaeAmount($selectedRate),
+                        ]);
+
+                        $createPayload = $this->prepareShipbaeShipmentPayload(
+                            $order,
+                            $package,
+                            $selectedRate['service'] ?? null,
+                            $selectedRate['package_type'] ?? 'custom_package'
+                        );
+
+                        $transaction = $this->createShipbaeTransactionFromPayload($createPayload, $order);
+                        if (!count($transaction['errorMsg']) && isset($transaction['value']) && is_array($transaction['value'])) {
+                            break;
+                        }
+
+                        $apiError = implode('; ', $transaction['errorMsg'] ?? ['create failed']);
+                        $attemptErrors[] = ($selectedRate['service'] ?? '?')
+                            . '/' . ($selectedRate['package_type'] ?? '?')
+                            . ': ' . $apiError;
+
+                        // Retry next candidate only for package-constraint style failures.
+                        if (!$this->isShipbaePackageConstraintError($apiError)) {
+                            break;
+                        }
+
+                        $transaction = null;
+                    }
+
+                    if (!$transaction || count($transaction['errorMsg'] ?? []) || !isset($transaction['value']) || !is_array($transaction['value'])) {
+                        $apiError = implode(' | ', $attemptErrors) ?: 'create shipment failed';
+                        $sentZip = (string) (($createPayload['from_address']['zip'] ?? null) ?: $normalizedZip);
+                        $reason = $this->formatShipbaeCreateFailureMessage(
+                            $orderId,
+                            $sentZip,
+                            $apiError,
+                            $createPayload['parcel'] ?? null,
+                            $selectedRate
+                        );
+                        Log::error('IMPORT LABELS SHIPBAE: ' . $reason, [
+                            'from_address' => $createPayload['from_address'] ?? null,
+                            'parcel' => $createPayload['parcel'] ?? null,
+                            'attempts' => $attemptErrors,
+                        ]);
                         array_push($ordersError, $reason);
                         continue;
                     }
@@ -3581,7 +3591,30 @@ $i++;
 
     private function formatShipbaeZipRejectionMessage(string $orderId, string $zip, string $apiError): string
     {
+        return $this->formatShipbaeCreateFailureMessage($orderId, $zip, $apiError, null, null);
+    }
+
+    private function formatShipbaeCreateFailureMessage(
+        string $orderId,
+        string $zip,
+        string $apiError,
+        ?array $parcel = null,
+        ?array $selectedRate = null
+    ): string {
         $zipLabel = $zip !== '' ? "'{$zip}'" : '(empty)';
+        $service = (string) ($selectedRate['service'] ?? '');
+        $packageType = (string) ($selectedRate['package_type'] ?? '');
+        $dims = '';
+        if (is_array($parcel)) {
+            $dims = sprintf(
+                ' parcel=%sx%sx%s in, weight=%s oz, package_type=%s',
+                $parcel['length'] ?? '?',
+                $parcel['width'] ?? '?',
+                $parcel['height'] ?? '?',
+                $parcel['weight'] ?? '?',
+                $parcel['package_type'] ?? ($packageType ?: '?')
+            );
+        }
 
         if (stripos($apiError, 'zip') !== false && stripos($apiError, 'not valid') !== false) {
             return $orderId
@@ -3591,7 +3624,92 @@ $i++;
                 . 'Use a street-deliverable US ZIP (Portland examples that work: 97214, 97201, 97266), then re-import.';
         }
 
-        return $orderId . ': create shipment failed (' . $apiError . '), from_address.zip=' . $zipLabel;
+        if ($this->isShipbaePackageConstraintError($apiError)) {
+            $rateLabel = trim($service . '/' . $packageType, '/');
+            return $orderId
+                . ': package constraints failed for rate '
+                . ($rateLabel !== '' ? $rateLabel : 'unknown')
+                . ' (' . $apiError . ').'
+                . $dims
+                . ' Tip: use custom_package / ground_advantage when size does not fit First-Class card/letter/flat.';
+        }
+
+        return $orderId . ': create shipment failed (' . $apiError . '), from_address.zip=' . $zipLabel . $dims;
+    }
+
+    private function isShipbaePackageConstraintError(string $apiError): bool
+    {
+        $apiErrorLower = strtolower($apiError);
+
+        return strpos($apiErrorLower, 'parcel length') !== false
+            || strpos($apiErrorLower, 'parcel width') !== false
+            || strpos($apiErrorLower, 'parcel height') !== false
+            || strpos($apiErrorLower, 'parcel thickness') !== false
+            || strpos($apiErrorLower, 'parcel weight') !== false
+            || strpos($apiErrorLower, 'package type') !== false
+            || strpos($apiErrorLower, 'first-class') !== false
+            || strpos($apiErrorLower, 'first class') !== false;
+    }
+
+    private function isShipbaeRestrictedMailpiecePackageType(?string $packageType): bool
+    {
+        $packageType = strtolower((string) $packageType);
+
+        return in_array($packageType, [
+            'usps_card',
+            'usps_letter',
+            'usps_flat',
+            'card',
+            'letter',
+            'flat',
+        ], true);
+    }
+
+    /**
+     * Excel auto-buy should prefer custom_package rates.
+     * First-Class card/letter/flat are often cheapest but reject normal box sizes.
+     *
+     * @return array<int, array>
+     */
+    private function selectShipbaeExcelRateCandidates(array $shipbaeRates, $service = null, $packageType = null): array
+    {
+        $sorted = $shipbaeRates;
+        usort($sorted, function ($a, $b) {
+            return $this->extractShipbaeAmount($a) <=> $this->extractShipbaeAmount($b);
+        });
+
+        if (!empty($service)) {
+            $matched = [];
+            foreach ($sorted as $rate) {
+                $serviceMatch = ($rate['service'] ?? null) === $service;
+                $packageMatch = empty($packageType) || (($rate['package_type'] ?? null) === $packageType);
+                if ($serviceMatch && $packageMatch) {
+                    $matched[] = $rate;
+                }
+            }
+            return $matched;
+        }
+
+        $customPackage = [];
+        $otherSafe = [];
+        foreach ($sorted as $rate) {
+            $ratePackageType = (string) ($rate['package_type'] ?? 'custom_package');
+            if ($this->isShipbaeRestrictedMailpiecePackageType($ratePackageType)) {
+                continue;
+            }
+
+            if ($ratePackageType === 'custom_package' || $ratePackageType === '') {
+                $customPackage[] = $rate;
+            } else {
+                $otherSafe[] = $rate;
+            }
+        }
+
+        // Prefer custom_package, then other non-mailpiece types (flat-rate boxes, etc.).
+        $candidates = array_merge($customPackage, $otherSafe);
+
+        // Keep a short fallback list so create can retry if the cheapest custom_package fails.
+        return array_slice($candidates, 0, 5);
     }
 
     private function mapAddressToShipbae($address, $fallbackEmail = null): array
