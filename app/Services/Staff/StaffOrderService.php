@@ -3278,12 +3278,17 @@ $i++;
             foreach ($import->rows as $key => $row) {
                 $orderId = $row['order_id'] ?? 'unknown';
 
-                $rs = DB::table('order_transactions')->where('order_id', $orderId)->first();
+                $rs = DB::table('order_transactions')
+                    ->where('order_id', $orderId)
+                    ->whereNotNull('tracking_number')
+                    ->where('tracking_number', '!=', '')
+                    ->first();
                 if (!!$rs) {
                     array_push($ordersSkip, $orderId);
                     continue;
                 }
 
+                DB::beginTransaction();
                 try {
                     $order = $this->createLabel($orderId)['order'];
 
@@ -3298,6 +3303,7 @@ $i++;
                             . ": shipping_zip '{$rawZip}' invalid US ZIP format after normalize ('{$normalizedZip}'). "
                             . 'Expected ##### or #####-####.';
                         Log::error('IMPORT LABELS SHIPBAE: ' . $reason);
+                        DB::rollBack();
                         array_push($ordersError, $reason);
                         continue;
                     }
@@ -3348,6 +3354,7 @@ $i++;
                     if (!$package) {
                         $reason = $orderId . ': order package not found';
                         Log::error('IMPORT LABELS SHIPBAE: ' . $reason);
+                        DB::rollBack();
                         array_push($ordersError, $reason);
                         continue;
                     }
@@ -3355,6 +3362,7 @@ $i++;
                     if (!$order->addressTo) {
                         $reason = $orderId . ': receiver address (addressTo) is missing';
                         Log::error('IMPORT LABELS SHIPBAE: ' . $reason);
+                        DB::rollBack();
                         array_push($ordersError, $reason);
                         continue;
                     }
@@ -3372,6 +3380,7 @@ $i++;
                                 'parcel' => $shipmentPayload['parcel'] ?? null,
                             ],
                         ]);
+                        DB::rollBack();
                         array_push($ordersError, $reason);
                         continue;
                     }
@@ -3386,6 +3395,7 @@ $i++;
                         $reason = $orderId . ': no suitable Shipbae rate for Excel auto-buy '
                             . '(prefer custom_package; first-class card/letter/flat skipped unless size matches)';
                         Log::error('IMPORT LABELS SHIPBAE: ' . $reason);
+                        DB::rollBack();
                         array_push($ordersError, $reason);
                         continue;
                     }
@@ -3412,7 +3422,7 @@ $i++;
                         );
 
                         $transaction = $this->createShipbaeTransactionFromPayload($createPayload, $order);
-                        if (!count($transaction['errorMsg']) && isset($transaction['value']) && is_array($transaction['value'])) {
+                        if (!count($transaction['errorMsg']) && isset($transaction['value']) && is_array($transaction['value']) && !empty($transaction['value']['tracking_number'])) {
                             break;
                         }
 
@@ -3429,8 +3439,8 @@ $i++;
                         $transaction = null;
                     }
 
-                    if (!$transaction || count($transaction['errorMsg'] ?? []) || !isset($transaction['value']) || !is_array($transaction['value'])) {
-                        $apiError = implode(' | ', $attemptErrors) ?: 'create shipment failed';
+                    if (!$transaction || count($transaction['errorMsg'] ?? []) || !isset($transaction['value']) || !is_array($transaction['value']) || empty($transaction['value']['tracking_number'])) {
+                        $apiError = implode(' | ', $attemptErrors) ?: 'create shipment failed or missing tracking number';
                         $sentZip = (string) (($createPayload['from_address']['zip'] ?? null) ?: $normalizedZip);
                         $reason = $this->formatShipbaeCreateFailureMessage(
                             $orderId,
@@ -3444,16 +3454,20 @@ $i++;
                             'parcel' => $createPayload['parcel'] ?? null,
                             'attempts' => $attemptErrors,
                         ]);
+                        DB::rollBack();
                         array_push($ordersError, $reason);
                         continue;
                     }
 
                     $this->persistShipbaeLabelData($order, $package, null, $transaction['value']);
 
+                    DB::commit();
+
                     Log::info('IMPORT LABELS SHIPBAE: Successfully created label for order ' . $orderId, [
                         'tracking_number' => $transaction['value']['tracking_number'] ?? null
                     ]);
                 } catch (Exception $e) {
+                    DB::rollBack();
                     $reason = $orderId . ': ' . $e->getMessage();
                     Log::error('IMPORT LABELS SHIPBAE: Exception for order ' . $orderId, [
                         'message' => $e->getMessage(),
@@ -3791,7 +3805,7 @@ $i++;
             'from_address' => $this->mapAddressToShipbae($addressFrom, $fallbackEmail),
             'to_address' => $this->mapAddressToShipbae($addressTo, $fallbackEmail),
             'parcel' => $parcel,
-            'reference_1' => substr((string) ($order->order_number ?? $order->id), 0, 30),
+            'reference_1' => substr((string) ($order->order_number ?: ('ORD' . $order->id)), 0, 30),
         ];
 
         if ($service) {
@@ -3799,6 +3813,77 @@ $i++;
         }
 
         return $payload;
+    }
+
+    /**
+     * Robustly extract tracking number from various possible response structures of Shipbae (Gori API v2)
+     */
+    private function extractShipbaeTrackingNumber($data): ?string
+    {
+        if (!is_array($data)) {
+            return null;
+        }
+
+        // 1. Direct tracking_code or tracking_number
+        if (!empty($data['tracking_code']) && is_string($data['tracking_code']) && trim($data['tracking_code']) !== '') {
+            return trim($data['tracking_code']);
+        }
+        if (!empty($data['tracking_number'])) {
+            $tn = $data['tracking_number'];
+            $val = is_array($tn) ? ($tn[0] ?? '') : (string)$tn;
+            if (trim($val) !== '') {
+                return trim($val);
+            }
+        }
+        if (!empty($data['customer_tracking_number']) && is_string($data['customer_tracking_number']) && trim($data['customer_tracking_number']) !== '') {
+            return trim($data['customer_tracking_number']);
+        }
+
+        // 2. Nested under data
+        if (!empty($data['data']) && is_array($data['data'])) {
+            $nested = $this->extractShipbaeTrackingNumber($data['data']);
+            if (!empty($nested)) {
+                return $nested;
+            }
+        }
+
+        // 3. Nested under tracker
+        if (!empty($data['tracker']) && is_array($data['tracker'])) {
+            if (!empty($data['tracker']['tracking_code']) && is_string($data['tracker']['tracking_code']) && trim($data['tracker']['tracking_code']) !== '') {
+                return trim($data['tracker']['tracking_code']);
+            }
+            if (!empty($data['tracker']['tracking_number']) && is_string($data['tracker']['tracking_number']) && trim($data['tracker']['tracking_number']) !== '') {
+                return trim($data['tracker']['tracking_number']);
+            }
+        }
+
+        // 4. Nested under label
+        if (!empty($data['label']) && is_array($data['label'])) {
+            if (!empty($data['label']['tracking_number']) && is_string($data['label']['tracking_number']) && trim($data['label']['tracking_number']) !== '') {
+                return trim($data['label']['tracking_number']);
+            }
+            if (!empty($data['label']['tracking_code']) && is_string($data['label']['tracking_code']) && trim($data['label']['tracking_code']) !== '') {
+                return trim($data['label']['tracking_code']);
+            }
+        }
+
+        // 5. Nested under usps
+        if (!empty($data['usps']) && is_array($data['usps'])) {
+            if (!empty($data['usps']['tracking_numbers'])) {
+                $numbers = $data['usps']['tracking_numbers'];
+                if (is_array($numbers) && count($numbers) > 0) {
+                    $val = trim((string)($numbers[0] ?? ''));
+                    if ($val !== '') return $val;
+                } elseif (is_string($numbers) && trim($numbers) !== '') {
+                    return trim($numbers);
+                }
+            }
+            if (!empty($data['usps']['tracking_number']) && is_string($data['usps']['tracking_number']) && trim($data['usps']['tracking_number']) !== '') {
+                return trim($data['usps']['tracking_number']);
+            }
+        }
+
+        return null;
     }
 
     private function getShipbaeRates(array $shipmentPayload): array
@@ -4014,10 +4099,22 @@ $i++;
 
             $data = $response['data'];
             $shipmentId = $data['id'] ?? null;
-            $trackingNumber = $data['tracking_code'] ?? ($data['customer_tracking_number'] ?? null);
+            $trackingNumber = $this->extractShipbaeTrackingNumber($data);
+
+            if (empty($trackingNumber)) {
+                Log::error('Shipbae API did not return tracking number', ['data' => $data]);
+                return [
+                    'value' => null,
+                    'errorMsg' => ['Shipbae API did not return a valid tracking number'],
+                    'httpCode' => 422
+                ];
+            }
+
             $remoteLabelUrl = $data['label']['image_url'] ?? ($data['label_url'] ?? null);
             $labelBase64 = $data['label']['image_base64'] ?? null;
-            $fileKey = $shipmentId ?: ($trackingNumber ?: ($order->order_number ?? $order->id));
+            $orderIdVal = is_object($order) ? ($order->id ?? '0') : ($order['id'] ?? '0');
+            $safeTracking = preg_replace('/[^A-Za-z0-9]/', '', (string)$trackingNumber);
+            $fileKey = 'order_' . $orderIdVal . '_' . ($safeTracking ?: ($shipmentId ?: Str::random(6)));
 
             // Always persist a local *.pdf URL so preview/download never depend on
             // CDN paths that sometimes omit the .pdf extension.
@@ -4244,6 +4341,10 @@ $i++;
                 'amount' => $amount
             ]);
 
+            // Clear old tracking and stale transactions for this order before SP call to prevent premature exit
+            DB::table('orders')->where('id', $order->id)->update(['tracking' => null]);
+            DB::table('order_transactions')->where('order_id', $order->id)->delete();
+
             DB::select('call label_create_input(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [
                 $userId,
                 $order->id,
@@ -4272,6 +4373,21 @@ $i++;
                 $weightType,
                 $trackingStatus,
             ]);
+
+            // Explicitly ensure both orders and order_transactions contain the accurate tracking number
+            if (!empty($trackingNumber)) {
+                DB::table('orders')->where('id', $order->id)->update([
+                    'tracking' => $trackingNumber,
+                    'status' => 'LABEL_CREATED',
+                    'updated_at' => now(),
+                ]);
+
+                DB::table('order_transactions')->where('order_id', $order->id)->update([
+                    'tracking_number' => $trackingNumber,
+                    'label_url' => $labelUrl,
+                    'shipping_provider' => 'SHIPBAE',
+                ]);
+            }
         } catch (Exception $e) {
             Log::error('persistShipbaeLabelData Exception', [
                 'message' => $e->getMessage(),
