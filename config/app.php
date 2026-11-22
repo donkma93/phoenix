@@ -178,6 +178,8 @@ return [
         App\Providers\AuthServiceProvider::class,
         // App\Providers\BroadcastServiceProvider::class,
         App\Providers\EventServiceProvider::class,
+        // Standalone Query Monitor Module (registered before RouteServiceProvider so /{locale} catch-all does not intercept /query-monitor)
+        Modules\QueryMonitor\QueryMonitorServiceProvider::class,
         App\Providers\RouteServiceProvider::class,
 
         Milon\Barcode\BarcodeServiceProvider::class,

@@ -15,8 +15,10 @@ class AlterTableUserRequestsChangeOptionAndAddNote extends Migration
     public function up()
     {
         // Doctrine-change method not support `tinyInteger` type
-        DB::statement("UPDATE user_requests SET `option` = '0'");
-        DB::statement("ALTER TABLE user_requests CHANGE `option` `option` TINYINT NULL DEFAULT NULL;");
+        if (DB::getDriverName() !== 'sqlite') {
+            DB::statement("UPDATE user_requests SET `option` = '0'");
+            DB::statement("ALTER TABLE user_requests CHANGE `option` `option` TINYINT NULL DEFAULT NULL;");
+        }
 
         Schema::table('user_requests', function (Blueprint $table) {
             $table->text('note')->nullable()->after('option');

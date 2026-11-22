@@ -15,9 +15,11 @@ class ChangePackageGroupsTable extends Migration
     public function up()
     {
         Schema::table('package_groups', function (Blueprint $table) {
-            DB::statement("ALTER TABLE package_groups MODIFY COLUMN `width` DOUBLE NULL DEFAULT NULL;");
-            DB::statement("ALTER TABLE package_groups MODIFY COLUMN `height` DOUBLE NULL DEFAULT NULL;");
-            DB::statement("ALTER TABLE package_groups MODIFY COLUMN `length` DOUBLE NULL DEFAULT NULL;");
+            if (DB::getDriverName() !== 'sqlite') {
+                DB::statement("ALTER TABLE package_groups MODIFY COLUMN `width` DOUBLE NULL DEFAULT NULL;");
+                DB::statement("ALTER TABLE package_groups MODIFY COLUMN `height` DOUBLE NULL DEFAULT NULL;");
+                DB::statement("ALTER TABLE package_groups MODIFY COLUMN `length` DOUBLE NULL DEFAULT NULL;");
+            }
         });
     }
 
