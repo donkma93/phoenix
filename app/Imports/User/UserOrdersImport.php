@@ -7,6 +7,7 @@ use App\Models\OrderAddress;
 use App\Models\Product;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Maatwebsite\Excel\Concerns\ToCollection;
 use Maatwebsite\Excel\Concerns\WithHeadingRow;
 use Maatwebsite\Excel\Concerns\SkipsEmptyRows;
@@ -25,6 +26,53 @@ class UserOrdersImport implements ToCollection, WithHeadingRow
     */
     public function collection(Collection $collection)
     {
+        $userId = Auth::id();
+
+        // Pre-collect all distinct product names in the CSV to preload products & inventory SKUs in 2 queries total
+        $neededNames = [];
+        foreach ($collection as $rowCollection) {
+            if ($rowCollection->filter()->isNotEmpty()) {
+                $name = $rowCollection['lineitem_name'] ?? null;
+                if ($name !== null && $name !== '') {
+                    $neededNames[$name] = true;
+                }
+            }
+        }
+
+        if (!empty($neededNames)) {
+            $preloadedProducts = Product::with('packageGroupWithTrashed')
+                ->where('user_id', $userId)
+                ->whereIn('name', array_keys($neededNames))
+                ->get();
+
+            foreach ($preloadedProducts as $prod) {
+                $this->products[$prod->name] = $prod;
+            }
+        }
+
+        $productIds = [];
+        foreach ($this->products as $prod) {
+            if ($prod) {
+                $productIds[] = $prod->id;
+            }
+        }
+
+        // Preload valid (product_id => [sku => true]) from inventories in 1 query (eliminates N+1 Validator exists queries)
+        $validSkusByProduct = [];
+        if (!empty($productIds)) {
+            $invRows = DB::table('inventories')
+                ->select('product_id', 'sku')
+                ->whereIn('product_id', $productIds)
+                ->whereNull('deleted_at')
+                ->get();
+            foreach ($invRows as $inv) {
+                $validSkusByProduct[$inv->product_id][(string) $inv->sku] = true;
+            }
+        }
+
+        // Memoize Shippo address validation results within this import (avoids duplicate HTTP API calls for same address)
+        $validatedAddressCache = [];
+
         foreach ($collection as $key => $rowCollection) {
             if($rowCollection->filter()->isNotEmpty()){
                 // TODO check condition validate
@@ -62,6 +110,19 @@ class UserOrdersImport implements ToCollection, WithHeadingRow
                     continue;
                 }
 
+                // Check product & SKU in-memory BEFORE making external Shippo HTTP call
+                $productName = $row['lineitem_name'];
+                $product = $this->products[$productName] ?? null;
+                if (!$product) {
+                    $this->errors[$key] = "The selected lineitem name is invalid.";
+                    continue;
+                }
+
+                if (!isset($validSkusByProduct[$product->id][(string) $row['lineitem_sku']])) {
+                    $this->errors[$key] = "The selected lineitem sku is invalid.";
+                    continue;
+                }
+
                 $street = $row['shipping_street'];
                 if ($row['shipping_address1']) {
                     $street .= ',' . $row['shipping_address1'];
@@ -74,7 +135,6 @@ class UserOrdersImport implements ToCollection, WithHeadingRow
                 $address = [
                     'name' => $row['shipping_name'],
                     'company' => $row['shipping_company'] ?? null,
-                    //'street1' => $row['shipping_street'],
                     'street1' => $street,
                     'street2' => $row['shipping_address1'] ?? null,
                     'street3' => $row['shipping_address2'] ?? null,
@@ -85,7 +145,12 @@ class UserOrdersImport implements ToCollection, WithHeadingRow
                     'phone' => $row['shipping_phone'] ?? null,
                 ];
 
-                $validateAddress = OrderAddress::validateAddress($address);
+                $addrHash = md5(json_encode($address));
+                if (!array_key_exists($addrHash, $validatedAddressCache)) {
+                    $validatedAddressCache[$addrHash] = OrderAddress::validateAddress($address);
+                }
+                $validateAddress = $validatedAddressCache[$addrHash];
+
                 if (count($validateAddress['errorMsg'])) {
                     $this->errors[$key] = $validateAddress['errorMsg'][0];
                     continue;
@@ -93,30 +158,8 @@ class UserOrdersImport implements ToCollection, WithHeadingRow
 
                 $address['street1'] = $row['shipping_street'];
                 $address['object_id'] = $validateAddress['value']['object_id'];
-                $address['user_id'] = Auth::id();
+                $address['user_id'] = $userId;
                 $this->addresses[$key] = $address;
-
-                if (!array_key_exists($row['lineitem_name'], $this->products)) {
-                    $product = Product::with('packageGroupWithTrashed')
-                        ->where('name', $row['lineitem_name'])
-                        ->where('user_id', Auth::id())
-                        ->first();
-
-                    $this->products[$row['lineitem_name']] = $product;
-                }
-
-                if (!$this->products[$row['lineitem_name']]) {
-                    $this->errors[$key] = "The selected lineitem name is invalid.";
-                    continue;
-                }
-
-                $validator = Validator::make($row, [
-                    'lineitem_sku' => 'exists:inventories,sku,deleted_at,NULL,product_id,' . $this->products[$row['lineitem_name']]->id
-                ]);
-
-                if ($validator->fails()) {
-                    $this->errors[$key] = $validator->errors()->first();
-                }
 
                 $this->rows[$key] = $row;
             }

@@ -51,22 +51,26 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
                 ];
             }
 
-            $check_price_exist = DB::table('pnx_price_tabledetails')->where('id_price_table', $table_id)->get()->toArray();
+            $check_price_exist = DB::table('pnx_price_tabledetails')->where('id_price_table', $table_id)->exists();
 
-            if (!!$check_price_exist) {
+            if ($check_price_exist) {
                 return [
                     'isValid' => false,
                     'errors' => 'Price list already exists!'
                 ];
             }
 
-            foreach ($import->rows as $key => $row) {
-                $result = DB::table('pnx_price_tabledetails')->insert([
+            $priceRows = [];
+            foreach ($import->rows as $row) {
+                $priceRows[] = [
                     'id_price_table' => $table_id,
                     'price' => $row['price'],
                     'weight' => $row['weight'],
                     'destination' => $row['destination'],
-                ]);
+                ];
+            }
+            foreach (array_chunk($priceRows, 500) as $chunk) {
+                DB::table('pnx_price_tabledetails')->insert($chunk);
             }
 
             DB::commit();
@@ -99,19 +103,24 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
                 ];
             }
 
-            $orderNumbers = $orderIds = [];
+            $orderMap = [];
+            $createdOrderIds = [];
             $orderProducts = $orderPackages = [];
             $products = $import->products;
             $now = Carbon::now();
 
             foreach ($import->rows as $key => $row) {
-                $orderAddressTo = OrderAddress::create($import->addresses[$key]);
+                $orderNumber = isset($row['order_number']) && trim((string) $row['order_number']) !== ''
+                    ? trim((string) $row['order_number'])
+                    : null;
 
-                if (!isset($row['order_number']) || !in_array($row['order_number'], $orderNumbers)) {
+                if ($orderNumber === null || !isset($orderMap[$orderNumber])) {
+                    $orderAddressTo = OrderAddress::create($import->addresses[$key]);
+
                     $newOrder = Order::create([
-                        'date' => $row['created_at'] ?? null,  // TODO: need convert Timezone when save (?)
+                        'date' => $row['created_at'] ?? null,
                         'order_address_to_id' => $orderAddressTo->id,
-                        'order_number' => $row['order_number'] ?? null,
+                        'order_number' => $orderNumber,
 
                         'item_quantity' => $row['lineitem_quantity'],
                         'item_name' => $row['lineitem_name'],
@@ -133,15 +142,14 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
                         'file' => null,
                     ]);
 
-                    if (isset($row['order_number'])) {
-                        array_push($orderNumbers, $row['order_number']);
-                        array_push($orderIds, $newOrder->id);
-                    }
-
                     $orderId = $newOrder->id;
+                    $createdOrderIds[] = $orderId;
+
+                    if ($orderNumber !== null) {
+                        $orderMap[$orderNumber] = $orderId;
+                    }
                 } else {
-                    $index = array_search($row['order_number'], $orderNumbers);
-                    $orderId = $orderIds[$index];
+                    $orderId = $orderMap[$orderNumber];
                 }
 
                 $targetProduct = $products[$row['lineitem_name']];
@@ -172,11 +180,23 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
             }
 
             if (count($orderProducts)) {
-                OrderProduct::insert($orderProducts);
+                foreach (array_chunk($orderProducts, 500) as $chunk) {
+                    OrderProduct::insert($chunk);
+                }
             }
 
             if (count($orderPackages)) {
-                OrderPackage::insert($orderPackages);
+                foreach (array_chunk($orderPackages, 500) as $chunk) {
+                    OrderPackage::insert($chunk);
+                }
+            }
+
+            if (count($createdOrderIds)) {
+                foreach (array_chunk($createdOrderIds, 500) as $idChunk) {
+                    DB::table('orders')
+                        ->whereIn('id', $idChunk)
+                        ->update(['order_code' => DB::raw("CONCAT('ODR', LPAD(id, 10, 0))")]);
+                }
             }
 
             DB::commit();
@@ -219,11 +239,15 @@ class StaffOrderService extends StaffBaseService implements StaffBaseServiceInte
             $now = Carbon::now();
             $ordersSkip = [];
             $i = 0;
-            foreach ($import->rows as $key => $row) {
-                $rs = DB::table('order_transactions')->where('order_id', $row['order_id'])->first();
-               
 
-                if (!!$rs) {
+            // Preload existing order_transactions in 1 query (eliminates N+1 per-row check)
+            $importOrderIds = array_values(array_unique(array_column($import->rows, 'order_id')));
+            $existingTxMap = !empty($importOrderIds)
+                ? DB::table('order_transactions')->whereIn('order_id', $importOrderIds)->pluck('order_id')->flip()->all()
+                : [];
+
+            foreach ($import->rows as $key => $row) {
+                if (isset($existingTxMap[$row['order_id']])) {
                     array_push($ordersSkip, $row['order_id']);
                     continue;
                 }
@@ -508,10 +532,14 @@ $i++;
             $ordersError = [];
             $ordersSkip = [];
 
-            foreach ($import->rows as $key => $row) {
-                $rs = DB::table('order_transactions')->where('order_id', $row['order_id'])->first();
+            // Preload existing order_transactions in 1 query (eliminates N+1 per-row check)
+            $importOrderIds = array_values(array_unique(array_column($import->rows, 'order_id')));
+            $existingTxMap = !empty($importOrderIds)
+                ? DB::table('order_transactions')->whereIn('order_id', $importOrderIds)->pluck('order_id')->flip()->all()
+                : [];
 
-                if (!!$rs) {
+            foreach ($import->rows as $key => $row) {
+                if (isset($existingTxMap[$row['order_id']])) {
                     array_push($ordersSkip, $row['order_id']);
                     continue;
                 }
@@ -829,8 +857,10 @@ $i++;
             OrderProduct::insert($orderProducts);
             OrderPackage::create($orderPackage);
 
-            // sync order code if null
-            DB::statement("UPDATE orders SET order_code = CONCAT('ODR', LPAD(id, 10, 0)) where order_code is null");
+            // Targeted PK update for newly created order only (avoids scanning entire orders table)
+            DB::table('orders')
+                ->where('id', $newOrder->id)
+                ->update(['order_code' => 'ODR' . str_pad((string) $newOrder->id, 10, '0', STR_PAD_LEFT)]);
 
             DB::commit();
 
@@ -855,10 +885,9 @@ $i++;
             ])
             ->has('user');
 
-        if (isset($request['email'])) {
-            $orders->whereHas('user', function ($query) use ($request) {
-                $query->where('email', 'like', '%' . $request['email'] . '%');
-            });
+        if (!empty($request['email'])) {
+            $matchingUserIds = User::where('email', 'like', '%' . $request['email'] . '%')->pluck('id');
+            $orders->whereIn('user_id', $matchingUserIds);
         }
         if (isset($request['id'])) {
             $orders = $orders->where('id', $request['id']);
@@ -912,20 +941,14 @@ $i++;
     }
 
     /**
-     * Build base query for staff order list (matches order_list_staff columns).
+     * Lightweight base query on orders only (no unnecessary 7-table join for counts/unfiltered paging).
      */
-    protected function staffOrderListBaseQuery($dateFrom, $dateTo, $orderStatus = 99)
+    protected function staffOrderThinBaseQuery($dateFrom, $dateTo, $orderStatus = 99)
     {
         $from = date('Y-m-d 00:00:00', strtotime($dateFrom));
         $toExclusive = date('Y-m-d 00:00:00', strtotime($dateTo . ' +1 day'));
 
         $query = DB::table('orders as odr')
-            ->join('order_package as pkg', 'odr.id', '=', 'pkg.order_id')
-            ->join('order_addresses as addr', 'addr.id', '=', 'odr.order_address_to_id')
-            ->leftJoin('order_product as odr_prod', 'odr.id', '=', 'odr_prod.order_id')
-            ->leftJoin('order_transactions as odr_tran', 'odr.id', '=', 'odr_tran.order_id')
-            ->leftJoin('order_rates as odr_rate', 'odr_tran.order_rate_id', '=', 'odr_rate.id')
-            ->leftJoin('users', 'users.id', '=', 'odr.user_id')
             ->whereNull('odr.deleted_at')
             ->where('odr.created_at', '>=', $from)
             ->where('odr.created_at', '<', $toExclusive);
@@ -935,6 +958,19 @@ $i++;
         }
 
         return $query;
+    }
+
+    /**
+     * Build joined query for free-text search (omits order_product join which previously inflated rows).
+     */
+    protected function staffOrderListBaseQuery($dateFrom, $dateTo, $orderStatus = 99)
+    {
+        return $this->staffOrderThinBaseQuery($dateFrom, $dateTo, $orderStatus)
+            ->join('order_package as pkg', 'odr.id', '=', 'pkg.order_id')
+            ->join('order_addresses as addr', 'addr.id', '=', 'odr.order_address_to_id')
+            ->leftJoin('order_transactions as odr_tran', 'odr.id', '=', 'odr_tran.order_id')
+            ->leftJoin('order_rates as odr_rate', 'odr_tran.order_rate_id', '=', 'odr_rate.id')
+            ->leftJoin('users', 'users.id', '=', 'odr.user_id');
     }
 
     /**
@@ -957,7 +993,13 @@ $i++;
         return $query->where(function ($outer) use ($terms) {
             foreach ($terms as $term) {
                 $like = '%' . str_replace(['%', '_'], ['\\%', '\\_'], $term) . '%';
-                $outer->orWhere(function ($q) use ($like) {
+                $outer->orWhere(function ($q) use ($term, $like) {
+                    // Exact prefix/code shortcut for ODR order codes uses idx_orders_order_code
+                    if (stripos($term, 'ODR') === 0 && strpos($term, ' ') === false) {
+                        $q->where('odr.order_code', '=', $term)
+                            ->orWhere('odr.order_code', 'like', $term . '%');
+                        return;
+                    }
                     $q->where('odr.order_code', 'like', $like)
                         ->orWhere('odr.order_number', 'like', $like)
                         ->orWhere('users.email', 'like', $like)
@@ -999,40 +1041,55 @@ $i++;
     }
 
     /**
-     * Cheap existence check for empty-state UI.
+     * Cheap existence check for empty-state UI (queries orders directly via index).
      */
     public function hasOrdersInRange($dateFrom, $dateTo, $orderStatus = 99)
     {
-        $query = $this->staffOrderListBaseQuery($dateFrom, $dateTo, $orderStatus);
-
-        return $query->limit(1)->exists();
+        return $this->staffOrderThinBaseQuery($dateFrom, $dateTo, $orderStatus)
+            ->limit(1)
+            ->exists();
     }
 
     /**
      * Server-side DataTables: SQL pagination only (max $length rows in memory).
-     * Uses a two-step query so order_product joins cannot inflate page size.
+     * Uses thin index-only query when no search term is given, avoiding 7-table join & DISTINCT filesort.
      */
     public function listForDataTable($dateFrom, $dateTo, $orderStatus, $searchValue, $start, $length)
     {
-        $base = $this->staffOrderListBaseQuery($dateFrom, $dateTo, $orderStatus);
+        $hasSearch = ($searchValue !== null && trim((string) $searchValue) !== '');
+        $thinBase = $this->staffOrderThinBaseQuery($dateFrom, $dateTo, $orderStatus);
 
-        // Distinct order count (order_product join can multiply rows)
-        $recordsTotal = (int) (clone $base)->count(DB::raw('DISTINCT odr.id'));
+        // Fast count directly on indexed orders table (instead of COUNT(DISTINCT) across 7 joined tables)
+        $recordsTotal = (int) (clone $thinBase)->count();
 
-        $filtered = $this->applyStaffOrderSearch(clone $base, $searchValue);
-        $recordsFiltered = ($searchValue !== null && trim((string) $searchValue) !== '')
-            ? (int) (clone $filtered)->count(DB::raw('DISTINCT odr.id'))
-            : $recordsTotal;
+        if (!$hasSearch) {
+            $recordsFiltered = $recordsTotal;
 
-        // Step 1: page of distinct order IDs only
-        $orderIds = (clone $filtered)
-            ->select('odr.id', 'odr.created_at')
-            ->groupBy('odr.id', 'odr.created_at')
-            ->orderByDesc('odr.created_at')
-            ->offset(max(0, (int) $start))
-            ->limit(max(1, (int) $length))
-            ->pluck('odr.id')
-            ->all();
+            // Step 1 (fast path): page of order IDs directly from indexed orders table
+            $orderIds = (clone $thinBase)
+                ->select('odr.id')
+                ->orderByDesc('odr.created_at')
+                ->orderByDesc('odr.id')
+                ->offset(max(0, (int) $start))
+                ->limit(max(1, (int) $length))
+                ->pluck('odr.id')
+                ->all();
+        } else {
+            $filtered = $this->applyStaffOrderSearch(
+                $this->staffOrderListBaseQuery($dateFrom, $dateTo, $orderStatus),
+                $searchValue
+            );
+            $recordsFiltered = (int) (clone $filtered)->count(DB::raw('DISTINCT odr.id'));
+
+            $orderIds = (clone $filtered)
+                ->select('odr.id', 'odr.created_at')
+                ->groupBy('odr.id', 'odr.created_at')
+                ->orderByDesc('odr.created_at')
+                ->offset(max(0, (int) $start))
+                ->limit(max(1, (int) $length))
+                ->pluck('odr.id')
+                ->all();
+        }
 
         if (count($orderIds) === 0) {
             return [
@@ -1042,10 +1099,10 @@ $i++;
             ];
         }
 
-        $itemSub = '(SELECT GROUP_CONCAT(DISTINCT name ORDER BY name ASC SEPARATOR \';\') '
-            . 'FROM products WHERE id IN (SELECT product_id FROM order_product WHERE order_product.order_id = odr.id))';
+        $itemSub = '(SELECT GROUP_CONCAT(DISTINCT p.name ORDER BY p.name ASC SEPARATOR \';\') '
+            . 'FROM order_product op INNER JOIN products p ON p.id = op.product_id WHERE op.order_id = odr.id)';
         $pklSub = '(SELECT COUNT(*) FROM order_journey '
-            . 'LEFT JOIN packing_list ON packing_list.id = order_journey.id_packing_list '
+            . 'INNER JOIN packing_list ON packing_list.id = order_journey.id_packing_list '
             . 'WHERE order_journey.order_id = odr.id AND order_journey.id_packing_list IS NOT NULL '
             . 'AND packing_list.status = 10)';
 

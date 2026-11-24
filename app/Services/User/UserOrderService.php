@@ -51,21 +51,28 @@ class UserOrderService extends UserBaseService implements UserBaseServiceInterfa
                 ];
             }
 
-            $orderNumbers = $orderIds = [];
+            $orderMap = [];
+            $createdOrderIds = [];
             $orderProducts = $orderPackages = [];
             $products = $import->products;
 
             $now = Carbon::now();
-            $user = User::where('role', User::ROLE_USER)->find(Auth::id());
+            $userId = Auth::id();
+            $user = User::select('id', 'partner_code', 'partner_id')
+                ->where('role', User::ROLE_USER)
+                ->find($userId);
+
             foreach ($import->rows as $key => $row) {
-                $orderId = 0;
-                $orderAddressTo = OrderAddress::create($import->addresses[$key]);
-                
-                if (!isset($row['order_number']) || !in_array($row['order_number'], $orderNumbers)) {
-                    
-                    $orderNumber = isset($row['order_number']) ? trim($row['order_number']) : null;
+                $orderNumber = isset($row['order_number']) && trim((string) $row['order_number']) !== ''
+                    ? trim((string) $row['order_number'])
+                    : null;
+
+                if ($orderNumber === null || !isset($orderMap[$orderNumber])) {
+                    // Only create OrderAddress when creating a new Order (prevents orphan duplicate addresses)
+                    $orderAddressTo = OrderAddress::create($import->addresses[$key]);
+
                     $newOrder = Order::create([
-                        'date' => $row['created_at'] ?? null,  // TODO: need convert Timezone when save (?)
+                        'date' => $row['created_at'] ?? null,
                         'order_address_to_id' => $orderAddressTo->id,
                         'order_number' => $orderNumber,
 
@@ -81,28 +88,27 @@ class UserOrderService extends UserBaseService implements UserBaseServiceInterfa
                         'payment' => Order::PAYMENT_UNPAY,
                         'fulfillment' => isset($row['fulfillment_status']) ? Order::getFulfillmentStatus($row['fulfillment_status']) : Order::UNFULFILLED,
                         'status' => Order::STATUS_NEW,
-                        'user_id' => Auth::id(),
-                        'partner_code' => $user->partner_code,
-                        'partner_id' => $user->partner_id,
+                        'user_id' => $userId,
+                        'partner_code' => $user ? $user->partner_code : null,
+                        'partner_id' => $user ? $user->partner_id : null,
 
                         // Do not persist full Excel row JSON (was bloating DB) or source file path
                         'content' => null,
                         'file' => null,
                     ]);
-                    
-                    if (isset($row['order_number'])) {
-                        array_push($orderNumbers, $row['order_number']);
-                        array_push($orderIds, $newOrder->id);
-                    }
 
                     $orderId = $newOrder->id;
+                    $createdOrderIds[] = $orderId;
+
+                    if ($orderNumber !== null) {
+                        $orderMap[$orderNumber] = $orderId;
+                    }
                 } else {
-                    $index = array_search($row['order_number'], $orderNumbers);
-                    $orderId = $orderIds[$index];
+                    $orderId = $orderMap[$orderNumber];
                 }
 
                 $targetProduct = $products[$row['lineitem_name']];
-               
+
                 $orderProducts[] = [
                     'order_id' => $orderId,
                     'product_id' => $targetProduct->id,
@@ -129,15 +135,25 @@ class UserOrderService extends UserBaseService implements UserBaseServiceInterfa
             }
 
             if (count($orderProducts)) {
-                OrderProduct::insert($orderProducts);
+                foreach (array_chunk($orderProducts, 500) as $chunk) {
+                    OrderProduct::insert($chunk);
+                }
             }
 
             if (count($orderPackages)) {
-                OrderPackage::insert($orderPackages);
+                foreach (array_chunk($orderPackages, 500) as $chunk) {
+                    OrderPackage::insert($chunk);
+                }
             }
 
-            // sync order code if null
-            DB::statement("UPDATE orders SET order_code = CONCAT('ODR', LPAD(id, 10, 0)) where order_code is null");
+            // Targeted PK update for newly created orders only (avoids scanning entire orders table)
+            if (count($createdOrderIds)) {
+                foreach (array_chunk($createdOrderIds, 500) as $idChunk) {
+                    DB::table('orders')
+                        ->whereIn('id', $idChunk)
+                        ->update(['order_code' => DB::raw("CONCAT('ODR', LPAD(id, 10, 0))")]);
+                }
+            }
 
             DB::commit();
 
@@ -310,11 +326,11 @@ class UserOrderService extends UserBaseService implements UserBaseServiceInterfa
             OrderProduct::insert($orderProducts);
             OrderPackage::create($orderPackage);
 
-            // sync order code if null
-            DB::statement("UPDATE orders SET order_code = CONCAT('ODR', LPAD(id, 10, 0)) where order_code is null");
+            // Targeted PK update for the newly created order only (avoids scanning entire orders table)
+            $orderCode = 'ODR' . str_pad((string) $newOrder->id, 10, '0', STR_PAD_LEFT);
+            DB::table('orders')->where('id', $newOrder->id)->update(['order_code' => $orderCode]);
             DB::commit();
 
-            $orderCode = DB::table('orders')->where('id', $newOrder->id)->pluck('order_code')->first();
             return [
                 'errorMsg' => [],
                 'orderCode' => $orderCode,

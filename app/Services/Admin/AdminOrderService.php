@@ -10,15 +10,22 @@ class AdminOrderService extends AdminBaseService implements AdminBaseServiceInte
 {
     public function list($request)
     {
+        // Keep list lean: skip orderRates (heavy JSON table) and select only needed order columns
         $orders = Order::with([
             'orderProducts.product', 'orderPackage',
-            'orderTransaction', 'addressFrom', 'addressTo', 'orderRates'
-        ])->has('user');
+            'orderTransaction', 'addressFrom', 'addressTo',
+        ])
+            ->select([
+                'id', 'order_code', 'order_number', 'status', 'payment', 'fulfillment',
+                'picking_status', 'state', 'user_id', 'partner_code',
+                'order_address_from_id', 'order_address_to_id',
+                'created_at', 'updated_at',
+            ])
+            ->has('user');
 
-        if(isset($request['email'])) {
-            $orders->whereHas('user', function ($query) use ($request) {
-                $query->where('email', 'like', '%'.$request['email'].'%');
-            });
+        if (!empty($request['email'])) {
+            $matchingUserIds = User::where('email', 'like', '%' . $request['email'] . '%')->pluck('id');
+            $orders->whereIn('user_id', $matchingUserIds);
         }
 
         if (isset($request['status'])) {
@@ -44,8 +51,11 @@ class AdminOrderService extends AdminBaseService implements AdminBaseServiceInte
         $orders = $orders->orderByDesc('updated_at')
             ->paginate();
 
-        $emails = User::where('role', User::ROLE_USER)->pluck('email')->toArray();
-        $users = User::where('role', User::ROLE_USER)->get();
+        // Single query on users (derive emails in PHP instead of querying users twice)
+        $users = User::select('id', 'email', 'partner_code', 'role')
+            ->where('role', User::ROLE_USER)
+            ->get();
+        $emails = $users->pluck('email')->toArray();
 
         return [
             'orders' => $orders,
