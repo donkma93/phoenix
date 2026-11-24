@@ -157,6 +157,9 @@ class TuningAnalyzer
         $outerSql = preg_replace('/\(\s*SELECT\b[^()]*\)/i', '', $outerSql);
 
         $cols = [];
+        if (preg_match('/\bWHERE\b(.*?)(?:\bORDER\s+BY\b|\bGROUP\s+BY\b|\bLIMIT\b|$)/is', $sql, $wm)) {
+            if (preg_match_all('/(?:`?[a-zA-Z0-9_]+`?\.)?`?([a-zA-Z0-9_]+)`?\s*(?:=|IN\b|>=|<=|>|<)/i', $wm[1], $cm)) {
+                foreach ($cm[1] as $c) {
         if (preg_match('/\bWHERE\b(.*?)(?:\bORDER\s+BY\b|\bGROUP\s+BY\b|\bLIMIT\b|$)/is', $outerSql, $wm)) {
             if (preg_match_all('/(?:`?([a-zA-Z0-9_]+)`?\.)?`?([a-zA-Z0-9_]+)`?\s*(?:=|IN\b|>=|<=|>|<)/i', $wm[1], $cm, PREG_SET_ORDER)) {
                 foreach ($cm as $match) {
@@ -172,6 +175,9 @@ class TuningAnalyzer
                 }
             }
         }
+        if (preg_match('/\bORDER\s+BY\s+(?:`?[a-zA-Z0-9_]+`?\.)?`?([a-zA-Z0-9_]+)`?/i', $sql, $om)) {
+            $c = $om[1];
+            if (strtolower($c) !== 'id') {
         if (preg_match('/\bORDER\s+BY\s+(?:`?([a-zA-Z0-9_]+)`?\.)?`?([a-zA-Z0-9_]+)`?/i', $outerSql, $om)) {
             $tblPrefix = $om[1] ?? '';
             $c = $om[2];
