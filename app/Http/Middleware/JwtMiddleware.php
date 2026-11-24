@@ -2,8 +2,10 @@
 
 namespace App\Http\Middleware;
 
+use App\Models\User;
 use Closure;
 use Exception;
+use Illuminate\Support\Facades\Cache;
 use JWTAuth;
 use Tymon\JWTAuth\Http\Middleware\BaseMiddleware;
 
@@ -19,7 +21,24 @@ class JwtMiddleware extends BaseMiddleware
     public function handle($request, Closure $next)
     {
         try {
-            $user = JWTAuth::parseToken()->authenticate();
+            $payload = JWTAuth::parseToken()->getPayload();
+            $userId = $payload->get('sub');
+            // Short 60s cache + explicit columns avoids hitting `users` table on every API request
+            $user = $userId
+                ? Cache::remember("jwt_user:{$userId}", 60, function () use ($userId) {
+                    return User::select(
+                        'id',
+                        'email',
+                        'email_verified_at',
+                        'role',
+                        'partner_id',
+                        'partner_code',
+                        'created_at',
+                        'updated_at'
+                    )->find($userId);
+                })
+                : null;
+
             if (!$user) {
                 return response()->json([
                     'status' => 'error',

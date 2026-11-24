@@ -430,6 +430,7 @@
     // ---------------------------------------------------------
     const riverState = {
         data: null,
+        canvasInfo: null,
         nodesLeft: [],
         nodesRight: [],
         branches: [],
@@ -452,9 +453,10 @@
     function layoutRiver() {
         const canvas = $('river-canvas');
         if (!canvas || !riverState.data) return;
-        const rect = canvas.getBoundingClientRect();
-        const w = Math.max(300, rect.width);
-        const h = Math.max(260, rect.height);
+        // Size canvas only on layout/resize (eliminates 60fps forced reflows inside drawRiverFrame)
+        riverState.canvasInfo = prepCanvas(canvas);
+        const w = Math.max(300, riverState.canvasInfo.w);
+        const h = Math.max(260, riverState.canvasInfo.h);
         const padX = 16, padY = 18;
         const nodeW = Math.min(230, Math.max(135, w * 0.22));
         const sources = riverState.data.sources || [];
@@ -532,7 +534,10 @@
     function drawRiverFrame(nowMs) {
         const canvas = $('river-canvas');
         if (canvas) {
-            const { ctx, w, h } = prepCanvas(canvas);
+            if (!riverState.canvasInfo) {
+                riverState.canvasInfo = prepCanvas(canvas);
+            }
+            const { ctx, w, h } = riverState.canvasInfo;
             ctx.clearRect(0, 0, w, h);
 
             if (!riverState.branches.length && !riverState.nodesLeft.length) {

@@ -19,6 +19,7 @@
 @endsection
 
 @push('scripts')
+    <script src="{{ asset('js/plugins/fullcalendar.min.js') }}"></script>
     <script>
         $(document).ready(function() {
             demo.initFullCalendar();

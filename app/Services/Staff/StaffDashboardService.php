@@ -13,33 +13,42 @@ use Carbon\Carbon;
 class StaffDashboardService extends StaffBaseService implements StaffBaseServiceInterface
 {
     function getAllUserRequest() {
-        $usersRequest = UserRequest::select('m_request_type_id', DB::raw('count(*) as total'))
-            ->whereHas('user', function($users) {
-                $users->where('role', config('auth.role.user'));
-            })
-            ->whereIn('m_request_type_id', [1, 3, 4])
-            ->groupBy('m_request_type_id')
-            ->get()
-            ->mapWithKeys(function ($item) {
-                return [$item['m_request_type_id'] => $item['total']];
-            })
+        // Explicit INNER JOIN instead of correlated whereHas EXISTS
+        $usersRequest = DB::table('user_requests as ur')
+            ->join('users as u', 'u.id', '=', 'ur.user_id')
+            ->select('ur.m_request_type_id', DB::raw('count(*) as total'))
+            ->whereNull('ur.deleted_at')
+            ->whereNull('u.deleted_at')
+            ->where('u.role', config('auth.role.user'))
+            ->whereIn('ur.m_request_type_id', [1, 3, 4])
+            ->groupBy('ur.m_request_type_id')
+            ->pluck('total', 'm_request_type_id')
             ->all();
 
-        $orders = Order::select('fulfillment', DB::raw('count(*) as total'))
+        // Covering index-only GROUP BY using idx_orders_deleted_fulfillment
+        $orders = DB::table('orders')
+            ->select('fulfillment', DB::raw('count(*) as total'))
+            ->whereNull('deleted_at')
             ->groupBy('fulfillment')
-            ->get()
-            ->mapWithKeys(function ($item) {
-                return [$item['fulfillment'] => $item['total']];
-            })
+            ->pluck('total', 'fulfillment')
             ->all();
 
-        $itemsPickToday = OrderProduct::whereHas('order', function($orders) {
-            $orders->where('fulfillment', Order::PENDING);
-        })->sum('quantity');
+        // Drive from indexed orders (deleted_at, fulfillment) instead of full-scanning 132k order_product rows
+        $itemsPickToday = (int) DB::table('orders as o')
+            ->join('order_product as op', function ($join) {
+                $join->on('op.order_id', '=', 'o.id')
+                    ->whereNull('op.deleted_at');
+            })
+            ->whereNull('o.deleted_at')
+            ->where('o.fulfillment', Order::PENDING)
+            ->sum('op.quantity');
 
         $today = Carbon::now();
 
-        $itemPicked = ToteHistory::whereDate('created_at', $today)->sum('quantity');
+        // Index-friendly date range instead of DATE(created_at) = ?
+        $itemPicked = (int) ToteHistory::where('created_at', '>=', $today->copy()->startOfDay())
+            ->where('created_at', '<=', $today->copy()->endOfDay())
+            ->sum('quantity');
 
         $itemsDueToday = $itemsPickToday - $itemPicked;
 

@@ -776,6 +776,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
         // Fulfill order
         Route::get('/orders', [UserOrderController::class, 'index'])->name('orders.index')
             ->middleware('role:user,user-epacket');
+        Route::get('/orders/datatable', [UserOrderController::class, 'listDataTable'])->name('orders.datatable')
+            ->middleware('role:user,user-epacket');
 
         Route::post('/orders/upload-files', [UserOrderController::class, 'uploadFiles'])->name('orders.uploadFiles')
             ->middleware('role:user');

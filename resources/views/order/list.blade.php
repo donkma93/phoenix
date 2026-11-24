@@ -622,7 +622,7 @@
             })
 
 
-            // Datatable server-side
+            // Datatable server-side (with 500ms searchDelay debounce to avoid firing 1 SQL query per keystroke)
             $('#datatable').DataTable({
                 "pagingType": "full_numbers",
                 "lengthMenu": [
@@ -638,6 +638,7 @@
                 processing: true,
                 serverSide: true,
                 searching: true,
+                searchDelay: 500,
                 ajax: {
                     url: "{{ route('staff.orders.datatable') }}",
                     data: function (d) {
@@ -650,7 +651,13 @@
                 columns: [
                     { data: 'checkbox', orderable: false, searchable: false, className: 'text-center' },
                     { data: 'id', searchable: false },
-                    { data: 'order_code', searchable: true },
+                    {
+                        data: 'order_code',
+                        searchable: true,
+                        render: function (data) {
+                            return '<p title="BILL" style="margin: 0">' + (data || '') + '</p>';
+                        }
+                    },
                     { data: 'customer', searchable: false },
                     { data: 'receiver', searchable: false },
                     { data: 'item', searchable: false },
@@ -659,17 +666,7 @@
                     { data: 'tracking', searchable: false },
                     { data: 'actions', orderable: false, searchable: false, className: 'text-center' },
                     { data: 'extra', orderable: false, searchable: false },
-                ],
-                createdRow: function(row, data) {
-                    $('td', row).eq(0).html(data.checkbox);
-                    $('td', row).eq(2).html('<p title="BILL" style="margin: 0">' + data.order_code + '</p>');
-                    $('td', row).eq(3).html(data.customer);
-                    $('td', row).eq(4).html(data.receiver);
-                    $('td', row).eq(5).html(data.item);
-                    $('td', row).eq(8).html(data.tracking);
-                    $('td', row).eq(9).html(data.actions);
-                    $('td', row).eq(10).html(data.extra);
-                }
+                ]
             });
 
 

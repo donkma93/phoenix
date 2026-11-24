@@ -287,6 +287,8 @@
 @endsection
 
 @push('scripts')
+    <script src="{{ asset('js/plugins/jquery-jvectormap.js') }}"></script>
+    <script src="{{ asset('js/plugins/chartjs.min.js') }}"></script>
     <script>
 
         $(document).ready(function() {

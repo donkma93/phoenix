@@ -185,6 +185,146 @@ class UserOrderService extends UserBaseService implements UserBaseServiceInterfa
         return  collect($orders);
     }
 
+    /**
+     * Lightweight existence check for /user/orders empty-state UI.
+     */
+    public function hasUserOrdersInRange($userId, $dateFrom, $dateTo): bool
+    {
+        $from = date('Y-m-d 00:00:00', strtotime($dateFrom));
+        $toExclusive = date('Y-m-d 00:00:00', strtotime($dateTo . ' +1 day'));
+
+        return DB::table('orders')
+            ->where('user_id', $userId)
+            ->whereNull('deleted_at')
+            ->where('created_at', '>=', $from)
+            ->where('created_at', '<', $toExclusive)
+            ->limit(1)
+            ->exists();
+    }
+
+    /**
+     * Server-side DataTables for /user/orders (matches customer_order_list columns 100%,
+     * uses fast 2-step indexed pagination so customers with 39k+ orders never freeze the browser).
+     */
+    public function listForUserDataTable($userId, $dateFrom, $dateTo, $searchValue, $start, $length): array
+    {
+        $from = date('Y-m-d 00:00:00', strtotime($dateFrom));
+        $toExclusive = date('Y-m-d 00:00:00', strtotime($dateTo . ' +1 day'));
+        $searchValue = trim((string) $searchValue);
+        $hasSearch = $searchValue !== '';
+
+        $thinBase = DB::table('orders as odr')
+            ->where('odr.user_id', $userId)
+            ->whereNull('odr.deleted_at')
+            ->where('odr.created_at', '>=', $from)
+            ->where('odr.created_at', '<', $toExclusive);
+
+        $recordsTotal = (int) (clone $thinBase)->count();
+
+        if (!$hasSearch) {
+            $recordsFiltered = $recordsTotal;
+            $orderIds = (clone $thinBase)
+                ->select('odr.id')
+                ->orderByDesc('odr.created_at')
+                ->orderByDesc('odr.id')
+                ->offset(max(0, (int) $start))
+                ->limit(max(1, (int) $length))
+                ->pluck('odr.id')
+                ->all();
+        } else {
+            $filtered = (clone $thinBase)
+                ->join('order_package as pkg', 'odr.id', '=', 'pkg.order_id')
+                ->join('order_addresses as addr', 'addr.id', '=', 'odr.order_address_to_id')
+                ->leftJoin('order_transactions as odr_tran', 'odr.id', '=', 'odr_tran.order_id')
+                ->where(function ($q) use ($searchValue) {
+                    if (stripos($searchValue, 'ODR') === 0 && strpos($searchValue, ' ') === false) {
+                        $q->where('odr.order_code', '=', $searchValue)
+                            ->orWhere('odr.order_code', 'like', $searchValue . '%');
+                        return;
+                    }
+                    $like = '%' . str_replace(['%', '_'], ['\\%', '\\_'], $searchValue) . '%';
+                    $q->where('odr.order_code', 'like', $like)
+                        ->orWhere('odr.order_number', 'like', $like)
+                        ->orWhere('addr.name', 'like', $like)
+                        ->orWhere('addr.street1', 'like', $like)
+                        ->orWhere('addr.city', 'like', $like)
+                        ->orWhere('addr.zip', 'like', $like)
+                        ->orWhere('odr_tran.tracking_number', 'like', $like)
+                        ->orWhere('odr_tran.shipping_carrier', 'like', $like);
+                });
+
+            $recordsFiltered = (int) (clone $filtered)->count(DB::raw('DISTINCT odr.id'));
+            $orderIds = (clone $filtered)
+                ->select('odr.id', 'odr.created_at')
+                ->groupBy('odr.id', 'odr.created_at')
+                ->orderByDesc('odr.created_at')
+                ->offset(max(0, (int) $start))
+                ->limit(max(1, (int) $length))
+                ->pluck('odr.id')
+                ->all();
+        }
+
+        if (empty($orderIds)) {
+            return [
+                'recordsTotal' => $recordsTotal,
+                'recordsFiltered' => $recordsFiltered,
+                'rows' => collect(),
+            ];
+        }
+
+        $itemSub = "(SELECT GROUP_CONCAT(DISTINCT p.name ORDER BY p.name ASC SEPARATOR ';') "
+            . 'FROM order_product op INNER JOIN products p ON p.id = op.product_id WHERE op.order_id = odr.id)';
+
+        $rows = DB::table('orders as odr')
+            ->join('order_package as pkg', 'odr.id', '=', 'pkg.order_id')
+            ->join('order_addresses as addr', 'addr.id', '=', 'odr.order_address_to_id')
+            ->leftJoin('order_transactions as odr_tran', 'odr.id', '=', 'odr_tran.order_id')
+            ->leftJoin('order_rates as odr_rate', 'odr_tran.order_rate_id', '=', 'odr_rate.id')
+            ->leftJoin('order_product as odr_pro', 'odr_pro.order_id', '=', 'odr.id')
+            ->whereIn('odr.id', $orderIds)
+            ->select([
+                'odr.id',
+                'odr.order_code',
+                'odr.order_number',
+                DB::raw('MAX(odr_rate.amount) as amount'),
+                DB::raw('MAX(odr_tran.shipping_carrier) as shipping_carrier'),
+                DB::raw("MAX(CASE WHEN odr_tran.tracking_number IS NOT NULL THEN CONCAT('\'', odr_tran.tracking_number) ELSE NULL END) as tracking"),
+                DB::raw('MAX(odr_rate.provider) as provider'),
+                'odr.partner_code',
+                'addr.zip',
+                'addr.name as receiver_name',
+                DB::raw("CONCAT(addr.street1, ', ', addr.city, ',', addr.state, ',', addr.country) as ADDR"),
+                DB::raw('MAX(pkg.weight) as weight'),
+                DB::raw('MAX(pkg.width) as width'),
+                DB::raw('MAX(pkg.height) as height'),
+                DB::raw('MAX(pkg.length) as length'),
+                DB::raw($itemSub . ' as ITEM'),
+                'odr.created_at',
+                DB::raw('MAX(odr_pro.quantity) as quantity'),
+            ])
+            ->groupBy(
+                'odr.id',
+                'odr.order_code',
+                'odr.order_number',
+                'odr.partner_code',
+                'addr.zip',
+                'addr.name',
+                'addr.street1',
+                'addr.city',
+                'addr.state',
+                'addr.country',
+                'odr.created_at'
+            )
+            ->orderByDesc('odr.created_at')
+            ->get();
+
+        return [
+            'recordsTotal' => $recordsTotal,
+            'recordsFiltered' => $recordsFiltered,
+            'rows' => $rows,
+        ];
+    }
+
     public function saveTrackingInfo($orderId, $fileKey, $trackingCode)
     {
         OrderTransaction::updateOrCreate([

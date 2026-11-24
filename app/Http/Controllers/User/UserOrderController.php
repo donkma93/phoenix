@@ -31,7 +31,6 @@ class UserOrderController extends UserBaseController
     public function index(Request $request)
     {
         try {
-            // Keep original stored-procedure flow (same columns/filters as before)
             $userId = auth()->user()->id;
             $dateFrom = trim((string) $request->input('date_from'));
             $dateTo = trim((string) $request->input('date_to'));
@@ -42,20 +41,96 @@ class UserOrderController extends UserBaseController
                 $dateFrom = date('Y-m-d', strtotime('-1 month'));
             }
 
-            $results = DB::select('call customer_order_list(?,?,?)', [
-                $dateFrom,
-                $dateTo,
-                $userId
-            ]);
+            // Empty-state flag only; rows are paginated server-side via orders.datatable AJAX
+            $hasOrders = $this->orderService->hasUserOrdersInRange($userId, $dateFrom, $dateTo);
 
             return view('user.order.index', [
-                'orders' => $results,
-                'oldInput' => $request->input(),
+                'orders' => $hasOrders ? [1] : [],
+                'oldInput' => array_merge($request->input(), [
+                    'date_from' => $dateFrom,
+                    'date_to' => $dateTo,
+                ]),
             ]);
         } catch (Exception $e) {
             Log::error($e);
             //TODO redirect to error page
             abort(500);
+        }
+    }
+
+    public function listDataTable(Request $request)
+    {
+        try {
+            $userId = auth()->user()->id;
+            $dateFrom = trim((string) $request->input('date_from')) ?: date('Y-m-d', strtotime('-1 month'));
+            $dateTo = trim((string) $request->input('date_to')) ?: date('Y-m-d');
+
+            $draw = intval($request->input('draw'));
+            $start = max(0, intval($request->input('start', 0)));
+            $length = intval($request->input('length', 50));
+            if ($length <= 0) {
+                $length = 50;
+            }
+            $length = min($length, 100);
+            $searchValue = trim((string) $request->input('search.value', ''));
+
+            $result = $this->orderService->listForUserDataTable(
+                $userId,
+                $dateFrom,
+                $dateTo,
+                $searchValue,
+                $start,
+                $length
+            );
+
+            $data = collect($result['rows'])->map(function ($order) {
+                $orderCode = e($order->order_code ?? '');
+                $recipientHtml = '<div><b>Address: </b>' . e($order->ADDR ?? '') . '</div>'
+                    . '<div><b>Zip: </b>' . e($order->zip ?? '') . '</div>';
+                $packageHtml = '<div><b>Length: </b>' . e($order->length ?? '') . '</div>'
+                    . '<div><b>Width: </b>' . e($order->width ?? '') . '</div>'
+                    . '<div><b>Height: </b>' . e($order->height ?? '') . '</div>'
+                    . '<div><b>Weight: </b>' . e($order->weight ?? '') . '</div>';
+                $itemHtml = '<div><b>Name: </b>' . e($order->ITEM ?? '') . '</div>'
+                    . '<div><b>Quantity: </b>' . e($order->quantity ?? '') . '</div>';
+                $trackingHtml = '<div>' . e($order->tracking ?? '') . '</div>'
+                    . '<b>' . e($order->shipping_carrier ?? '') . '</b>';
+                $actionsHtml = '<div><a class="btn btn-round btn-sm btn-info btn-block" href="'
+                    . route('orders.show', ['id' => $order->id]) . '">' . e(__('Detail')) . '</a></div>'
+                    . '<div class="mt-2"><button class="btn btn-round btn-sm btn-success btn-block print-label" type="button" data-order-code="'
+                    . $orderCode . '">' . e(__('Print')) . '</button></div>';
+                $checkboxHtml = '<input id="' . $orderCode . '" class="form-group select_item_order" type="checkbox" name="label_list[]" value="' . $orderCode . '">';
+
+                return [
+                    'order_code' => $orderCode,
+                    'order_number' => e($order->order_number ?? ''),
+                    'receiver_name' => e($order->receiver_name ?? ''),
+                    'recipient' => $recipientHtml,
+                    'package_info' => $packageHtml,
+                    'item' => $itemHtml,
+                    'amount' => !empty($order->amount) ? number_format((float) $order->amount) : '',
+                    'created_at' => e($order->created_at ?? ''),
+                    'tracking' => $trackingHtml,
+                    'actions' => $actionsHtml,
+                    'checkbox' => $checkboxHtml,
+                ];
+            })->values()->all();
+
+            return response()->json([
+                'draw' => $draw,
+                'recordsTotal' => $result['recordsTotal'],
+                'recordsFiltered' => $result['recordsFiltered'],
+                'data' => $data,
+            ]);
+        } catch (Exception $e) {
+            Log::error($e);
+            return response()->json([
+                'draw' => intval($request->input('draw')),
+                'recordsTotal' => 0,
+                'recordsFiltered' => 0,
+                'data' => [],
+                'error' => 'Failed to load orders.',
+            ], 500);
         }
     }
 
@@ -427,16 +502,65 @@ class UserOrderController extends UserBaseController
             ], 422);
         }
 
-        $order = DB::table('orders')
-            ->where('user_id', auth()->id())
-            ->whereNull('deleted_at')
-            ->where(function ($q) use ($customerOrderCode) {
-                $q->where('order_number', $customerOrderCode)
-                    ->orWhere('order_code', $customerOrderCode);
-            })
-            ->first();
+        // Single merged query: orders + address_to + address_from + order_transactions (1 DB round-trip instead of 4)
+        $userId = auth()->id();
+        $primaryCol = stripos($customerOrderCode, 'ODR') === 0 ? 'o.order_code' : 'o.order_number';
+        $fallbackCol = $primaryCol === 'o.order_code' ? 'o.order_number' : 'o.order_code';
 
-        if (!$order) {
+        $baseQuery = function (string $col) use ($userId, $customerOrderCode) {
+            return DB::table('orders as o')
+                ->leftJoin('order_addresses as addr_to', function ($join) {
+                    $join->on('addr_to.id', '=', 'o.order_address_to_id')
+                        ->whereNull('addr_to.deleted_at');
+                })
+                ->leftJoin('order_addresses as addr_from', function ($join) {
+                    $join->on('addr_from.id', '=', 'o.order_address_from_id')
+                        ->whereNull('addr_from.deleted_at');
+                })
+                ->leftJoin('order_transactions as tx', function ($join) {
+                    $join->on('tx.order_id', '=', 'o.id')
+                        ->whereNull('tx.deleted_at');
+                })
+                ->select([
+                    'o.id',
+                    'o.order_code',
+                    'o.order_address_to_id',
+                    'o.order_address_from_id',
+                    'addr_to.id as to_exists',
+                    'addr_to.country as to_country',
+                    'addr_to.state as to_state',
+                    'addr_to.city as to_city',
+                    'addr_to.street1 as to_street',
+                    'addr_to.zip as to_zip',
+                    'addr_to.name as to_name',
+                    'addr_to.phone as to_phone',
+                    'addr_to.email as to_email',
+                    'addr_to.company as to_company',
+                    'addr_from.id as from_exists',
+                    'addr_from.country as from_country',
+                    'addr_from.state as from_state',
+                    'addr_from.city as from_city',
+                    'addr_from.street1 as from_street',
+                    'addr_from.zip as from_zip',
+                    'addr_from.name as from_name',
+                    'addr_from.phone as from_phone',
+                    'addr_from.email as from_email',
+                    'addr_from.company as from_company',
+                    'tx.id as tx_exists',
+                    'tx.label_url',
+                    'tx.shipping_carrier',
+                    'tx.tracking_number',
+                    'tx.tracking_status',
+                ])
+                ->where('o.user_id', $userId)
+                ->whereNull('o.deleted_at')
+                ->where($col, $customerOrderCode)
+                ->first();
+        };
+
+        $row = $baseQuery($primaryCol) ?: $baseQuery($fallbackCol);
+
+        if (!$row) {
             return response()->json([
                 'status' => 'error',
                 'message' => 'Order not found.'
@@ -446,57 +570,71 @@ class UserOrderController extends UserBaseController
         $response = [
             'status' => 'success',
             'customer_order_code' => $customerOrderCode,
-            'order_code' => $order->order_code ?? null,
+            'order_code' => $row->order_code ?? null,
             'carrier' => null,
             'tracking_number' => null,
             'tracking_status' => null,
             'tracking_journey' => null,
             'label_url' => null,
-            'address_to' => null,
-            'address_from' => null
+            'address_to' => $row->to_exists ? (object) [
+                'country' => $row->to_country,
+                'state' => $row->to_state,
+                'city' => $row->to_city,
+                'street' => $row->to_street,
+                'zip' => $row->to_zip,
+                'name' => $row->to_name,
+                'phone' => $row->to_phone,
+                'email' => $row->to_email,
+                'company' => $row->to_company,
+            ] : null,
+            'address_from' => $row->from_exists ? (object) [
+                'country' => $row->from_country,
+                'state' => $row->from_state,
+                'city' => $row->from_city,
+                'street' => $row->from_street,
+                'zip' => $row->from_zip,
+                'name' => $row->from_name,
+                'phone' => $row->from_phone,
+                'email' => $row->from_email,
+                'company' => $row->from_company,
+            ] : null,
         ];
 
-        if ($order->order_address_to_id) {
-            $response['address_to'] = DB::table('order_addresses')
-                ->select('country', 'state', 'city', 'street1 as street', 'zip', 'name', 'phone', 'email', 'company')
-                ->where('id', $order->order_address_to_id)
-                ->whereNull('deleted_at')
-                ->first();
-        }
+        if ($row->tx_exists) {
+            $response['label_url'] = $row->label_url;
+            $response['carrier'] = strtoupper((string) $row->shipping_carrier);
+            $response['tracking_number'] = $row->tracking_number;
+            $response['tracking_status'] = $row->tracking_status;
 
-        if ($order->order_address_from_id) {
-            $response['address_from'] = DB::table('order_addresses')
-                ->select('country', 'state', 'city', 'street1 as street', 'zip', 'name', 'phone', 'email', 'company')
-                ->where('id', $order->order_address_from_id)
-                ->whereNull('deleted_at')
-                ->first();
-        }
-
-        $orderTransaction = DB::table('order_transactions')
-            ->where('order_id', $order->id)
-            ->whereNull('deleted_at')
-            ->first();
-
-        if ($orderTransaction) {
-            $response['label_url'] = $orderTransaction->label_url;
-            $response['carrier'] = strtoupper($orderTransaction->shipping_carrier);
-            $response['tracking_number'] = $orderTransaction->tracking_number;
-            $response['tracking_status'] = $orderTransaction->tracking_status;
-
-            $carrier = DB::table('order_tracking_journey')->where('bill_code_ref', $orderTransaction->tracking_number)
-                ->where('carrier', '!=', '')
-                ->whereNotNull('carrier')
-                ->pluck('carrier')->first();
-
-            if ($carrier) {
-                $response['carrier'] = strtoupper($carrier);
-            }
-
-            if ($orderTransaction->tracking_number) {
+            // Single indexed query on order_tracking_journey (eliminates duplicate carrier pluck query & SELECT *)
+            if (!empty($row->tracking_number)) {
                 $journey = DB::table('order_tracking_journey')
-                    ->where('bill_code_ref', $orderTransaction->tracking_number)
+                    ->select(
+                        'id',
+                        'bill_code_ref',
+                        'carrier',
+                        'bill_code',
+                        'status',
+                        'note',
+                        'location',
+                        'city',
+                        'country',
+                        'date_journey',
+                        'create_date',
+                        'provider'
+                    )
+                    ->where('bill_code_ref', $row->tracking_number)
                     ->orderBy('date_journey', 'desc')
-                    ->get()->toArray();
+                    ->get()
+                    ->toArray();
+
+                foreach ($journey as $step) {
+                    if (!empty($step->carrier)) {
+                        $response['carrier'] = strtoupper($step->carrier);
+                        break;
+                    }
+                }
+
                 $response['tracking_journey'] = $journey;
             }
         }

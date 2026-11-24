@@ -237,77 +237,11 @@
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    @php
-                                        $i = 1;
-                                    @endphp
-                                    @foreach ($orders as $order)
-                                        <tr>
-                                            <td>{{ $order->order_code ?? '' }}
-                                            </td>
-                                            <td>
-                                                {{ $order->order_number ?? '' }}
-                                            </td>
-                                            <td>
-                                                {{ $order->receiver_name ?? '' }}
-                                            </td>
-                                            <td>
-                                                <div><b>Address:
-                                                    </b>{{ $order->ADDR ?? '' }}
-                                                </div>
-                                                <div><b>Zip:
-                                                    </b>{{ $order->zip ?? '' }}
-                                                </div>
-                                            </td>
-                                            <td style="text-align: left">
-                                                <div><b>Length: </b>{{ $order->length ?? '' }}</div>
-                                                <div><b>Width: </b>{{ $order->width ?? '' }}</div>
-                                                <div><b>Height: </b>{{ $order->height ?? '' }}</div>
-                                                <div><b>Weight: </b>{{ $order->weight ?? '' }}</div>
-                                            </td>
-                                            <td style="text-align: left">
-                                                <div><b>Name: </b>{{ $order->ITEM ?? '' }}</div>
-                                                <div><b>Quantity: </b>{{ $order->quantity ?? '' }}</div>
-                                            </td>
-                                            <td>
-                                                {{ $order->amount ? number_format($order->amount) : '' }}
-                                            </td>
-                                            {{--<td style="text-align: center">
-                                                {{ $order->provider ?? '' }}</td>--}}
-                                            <td style="text-align: center">
-                                                {{ $order->created_at ?? '' }}</td>
-                                            <td style="text-align: left">
-                                                <div>{{ $order->tracking ?? '' }}</div>
-                                                <b>{{ $order->shipping_carrier ?? '' }}</b>
-                                            </td>
-                                            <td>
-                                                <div>
-                                                    <a class="btn btn-round btn-sm btn-info btn-block"
-                                                       href="{{ route('orders.show', ['id' => $order->id]) }}">
-                                                        {{ __('Detail') }}
-                                                    </a>
-                                                </div>
-                                                <div class="mt-2">
-                                                    <button class="btn btn-round btn-sm btn-success btn-block print-label"
-                                                       type="button" data-order-code="{{ $order->order_code ?? '' }}">
-                                                        {{ __('Print') }}
-                                                    </button>
-                                                </div>
-                                            </td>
-                                            <td>
-                                                <input id="{{ $order->order_code ?? '' }}" class="form-group select_item_order" type="checkbox"
-                                                       name="label_list[]" value="{{ $order->order_code ?? '' }}">
-                                            </td>
-                                        </tr>
-
-                                        @php
-                                            $i++;
-                                        @endphp
-                                    @endforeach
                                 </tbody>
                             </table>
                             </form>
                         </div>
-                        {{-- Client DataTable handles paging (same as original flow) --}}
+                        {{-- Server-side DataTable handles pagination & search smoothly for large accounts --}}
                     @else
                         <div class="text-center">{{ __('No data.') }}</div>
                     @endif
@@ -382,28 +316,58 @@
             });
 
 
-            // Datatable (original client-side paging)
-            $('.datatable').DataTable({
-                "pagingType": "full_numbers",
-                "lengthMenu": [
-                    [50, 25, 10],
-                    [50, 25, 10]
-                ],
-                responsive: true,
-                language: {
-                    search: "_INPUT_",
-                    searchPlaceholder: "Search records",
-                },
-                "aaSorting": [],
+            // Server-side DataTable (prevents DOM freeze for accounts with tens of thousands of orders)
+            if ($('#user-package-table').length) {
+                $('#user-package-table').DataTable({
+                    "pagingType": "full_numbers",
+                    "lengthMenu": [
+                        [50, 25, 10],
+                        [50, 25, 10]
+                    ],
+                    responsive: true,
+                    language: {
+                        search: "_INPUT_",
+                        searchPlaceholder: "Search records",
+                    },
+                    "aaSorting": [],
+                    processing: true,
+                    serverSide: true,
+                    searching: true,
+                    searchDelay: 500,
+                    ajax: {
+                        url: "{{ route('orders.datatable') }}",
+                        data: function (d) {
+                            d.date_from = $.trim($('#date_from').val());
+                            d.date_to = $.trim($('#date_to').val());
+                        }
+                    },
+                    columns: [
+                        { data: 'order_code', orderable: false },
+                        { data: 'order_number', orderable: false },
+                        { data: 'receiver_name', orderable: false },
+                        { data: 'recipient', orderable: false },
+                        { data: 'package_info', orderable: false, className: 'text-left' },
+                        { data: 'item', orderable: false, className: 'text-left' },
+                        { data: 'amount', orderable: false },
+                        { data: 'created_at', orderable: false, className: 'text-center' },
+                        { data: 'tracking', orderable: false, className: 'text-left' },
+                        { data: 'actions', orderable: false, searchable: false },
+                        { data: 'checkbox', orderable: false, searchable: false }
+                    ]
+                });
+            }
+
+            // Select all handler (delegated for server-side rows)
+            $(document).on('change', '#select_all_order', function () {
+                $('.select_item_order').prop('checked', $(this).is(':checked'));
             });
 
-
-            // Print label
-            $('.print-label').click(function () {
+            // Print single label (delegated so it works across AJAX DataTable pages)
+            $(document).on('click', '.print-label', function () {
                 let order_code = $(this).data('order-code');
                 $('input.label_list').val(order_code);
                 $('form#form_print_label').submit();
-            })
+            });
 
             $('.print-label-list').click(function (e) {
                 e.preventDefault();
@@ -412,13 +376,13 @@
                     if ($(this).prop('checked') === true) {
                         list_label.push($(this).val());
                     }
-                })
+                });
                 if (list_label.length === 0) {
                     alert('Please select at least one record to print!');
                 } else {
                     $('form#form_print_label_list').submit();
                 }
-            })
+            });
         });
     </script>
 @endpush
