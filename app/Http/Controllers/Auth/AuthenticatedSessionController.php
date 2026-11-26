@@ -60,8 +60,17 @@ class AuthenticatedSessionController extends Controller
         $response = Route::dispatch($requestAPI);
 
         $role = $request->user()->role;
+        $tokenPayload = json_decode($response->getContent());
+        $accessToken = is_object($tokenPayload) && isset($tokenPayload->access_token)
+            ? $tokenPayload->access_token
+            : null;
 
-        return redirect(route(User::$home[$role]))->with('api-auth', json_decode($response->content())->access_token);
+        $redirect = redirect(route(User::$home[$role]));
+        if ($accessToken) {
+            $redirect->with('api-auth', $accessToken);
+        }
+
+        return $redirect;
     }
 
     /**

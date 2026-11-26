@@ -31,8 +31,9 @@ class AdminDashboardController extends AdminBaseController
             $countItems = $this->dashboardService->index();
             return view('admin.dashboard.index', $countItems);
         } catch(Exception $e) {
-            Log::error($e);
-            //TODO redirect to error page
+            Log::error('Admin dashboard failed: '.$e->getMessage(), [
+                'exception' => $e,
+            ]);
             abort(500);
         }
     }

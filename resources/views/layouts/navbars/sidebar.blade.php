@@ -54,8 +54,52 @@
             </div>
         </div>
         <ul class="nav">
+            <!-- Admin -->
+            @if (auth()->user()->role == 0)
+                <li class="{{ $elementActive == 'dashboard' ? 'active' : '' }}">
+                    <a href="{{ route('admin.dashboard') }}">
+                        <i class="nc-icon nc-bank"></i>
+                        <p>{{ __('Dashboard') }}</p>
+                    </a>
+                </li>
+                <li class="{{ $elementActive == 'orderOverview' ? 'active' : '' }}">
+                    <a href="{{ route('admin.orderOverview') }}">
+                        <i class="nc-icon nc-chart-bar-32"></i>
+                        <p>{{ __('Order overview') }}</p>
+                    </a>
+                </li>
+                <li class="{{ $elementActive == 'users' ? 'active' : '' }}">
+                    <a href="{{ route('admin.user.list') }}">
+                        <i class="nc-icon nc-single-02"></i>
+                        <p>{{ __('Users Management') }}</p>
+                    </a>
+                </li>
+                <li class="{{ $elementActive == 'orders' ? 'active' : '' }}">
+                    <a href="{{ route('admin.orders.list') }}">
+                        <i class="nc-icon nc-cart-simple"></i>
+                        <p>{{ __('Orders') }}</p>
+                    </a>
+                </li>
+                <li class="{{ $elementActive == 'packages' ? 'active' : '' }}">
+                    <a href="{{ route('admin.package.list') }}">
+                        <i class="nc-icon nc-box"></i>
+                        <p>{{ __('Packages') }}</p>
+                    </a>
+                </li>
+                <li class="{{ $elementActive == 'requests' ? 'active' : '' }}">
+                    <a href="{{ route('admin.request.list') }}">
+                        <i class="nc-icon nc-paper"></i>
+                        <p>{{ __('Requests') }}</p>
+                    </a>
+                </li>
+                <li class="{{ $elementActive == 'warehouses' ? 'active' : '' }}">
+                    <a href="{{ route('admin.warehouse.list') }}">
+                        <i class="nc-icon nc-istanbul"></i>
+                        <p>{{ __('Warehouses') }}</p>
+                    </a>
+                </li>
             <!-- Staff -->
-            @if (auth()->user()->role == 1)
+            @elseif (auth()->user()->role == 1)
                 <li class="{{ $elementActive == 'dashboard' ? 'active' : '' }}">
                     <a href="{{ route('staff.dashboard') }}">
                         <i class="nc-icon nc-bank"></i>
